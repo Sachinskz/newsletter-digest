@@ -1,0 +1,24 @@
+{
+  "$schema": "https://busibox.io/schemas/app-manifest-v1.json",
+  "name": "Newsletter Digest",
+  "id": "newsletter-digest",
+  "version": "1.0.0",
+  "description": "AI-powered newsletter summaries for Microsoft 365 mailboxes.",
+  "icon": "Newspaper",
+  "defaultPath": "/newsletter-digest",
+  "defaultPort": 3002,
+  "healthEndpoint": "/api/health",
+  "buildCommand": "npm run build",
+  "startCommand": "npm start",
+  "appMode": "frontend",
+  "requiredEnvVars": [
+    "MS_CLIENT_ID",
+    "MS_CLIENT_SECRET",
+    "MS_REDIRECT_URI"
+  ],
+  "optionalEnvVars": [
+    "NEWSLETTER_SUMMARY_AGENT_NAME",
+    "NEWSLETTER_SUMMARY_AGENT_TIER"
+  ],
+  "busiboxAppVersion": "^3.0.0"
+}

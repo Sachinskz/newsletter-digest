@@ -1,0 +1,286 @@
+@import "tailwindcss";
+
+/* Scan busibox-app package for Tailwind classes (not scanned by default since it's in node_modules) */
+/* Include both dist (published) and src (npm linked local dev) */
+@source "../node_modules/@jazzmind/busibox-app/dist";
+@source "../node_modules/@jazzmind/busibox-app/src";
+
+@plugin "@tailwindcss/typography";
+
+@theme {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-sora);
+  --font-display: var(--font-fraunces);
+  --font-mono: var(--font-geist-mono);
+}
+
+/* Configure dark mode to use class strategy */
+@variant dark (&:where(.dark, .dark *));
+
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+}
+
+/* Dark mode via class (for theme toggle) */
+.dark {
+  --background: #0a0a0a;
+  --foreground: #ededed;
+}
+
+/* Dark mode via system preference (only when no explicit theme class is set) */
+@media (prefers-color-scheme: dark) {
+  :root:not(.light):not(.dark) {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+  }
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sora), sans-serif;
+}
+
+.font-display {
+  font-family: var(--font-fraunces), serif;
+}
+
+.nav-rail-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.625rem;
+  border-radius: 0.875rem;
+  padding: 0.625rem 0.75rem;
+  color: rgba(255, 255, 255, 0.52);
+  font-size: 0.84rem;
+  font-weight: 600;
+  white-space: nowrap;
+  transition: color 150ms ease, background 150ms ease, border-color 150ms ease;
+}
+
+.nav-rail-item:hover {
+  color: rgba(255, 255, 255, 0.9);
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.nav-rail-item.active {
+  color: #fff;
+  border: 1px solid rgba(124, 92, 255, 0.28);
+  background: linear-gradient(180deg, rgba(124, 92, 255, 0.18), rgba(124, 92, 255, 0.06));
+}
+
+.workspace-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  border-radius: 0.75rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.045);
+  padding: 0.5rem 0.65rem;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 0.75rem;
+  font-weight: 600;
+  transition: border-color 150ms ease, background 150ms ease, color 150ms ease;
+}
+
+.workspace-btn:hover {
+  border-color: rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+
+.fade-lift {
+  animation: fade-lift 260ms ease both;
+}
+
+@keyframes fade-lift {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Hide footer on pages that need full height */
+body.hide-footer footer,
+body.hide-footer [data-version-bar] {
+  display: none !important;
+}
+
+.analyst-glass {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.02));
+  backdrop-filter: blur(14px);
+  box-shadow: 0 18px 55px rgba(0, 0, 0, 0.2);
+}
+
+.analyst-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  border-radius: 0.7rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.03);
+  padding: 0.5rem 0.85rem;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.8);
+  transition:
+    background 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease,
+    transform 150ms ease;
+}
+
+.analyst-btn:hover {
+  border-color: rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.06);
+  color: #fff;
+}
+
+.analyst-btn:active {
+  transform: translateY(1px);
+}
+
+.analyst-btn-primary {
+  border-color: rgba(124, 92, 255, 0.6);
+  background: linear-gradient(135deg, #7c5cff, #5b3df5);
+  color: #fff;
+  box-shadow: 0 6px 24px -8px rgba(124, 92, 255, 0.6);
+}
+
+.analyst-btn-primary:hover {
+  border-color: rgba(124, 92, 255, 0.72);
+  background: linear-gradient(135deg, #8668ff, #6547ff);
+}
+
+.analyst-btn-ghost {
+  background: transparent;
+  box-shadow: none;
+}
+
+.analyst-input,
+.analyst-select,
+.analyst-textarea {
+  width: 100%;
+  border-radius: 0.9rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+  padding: 0.85rem 0.95rem;
+  font-size: 0.825rem;
+  color: #fff;
+  outline: none;
+  transition:
+    border-color 150ms ease,
+    background 150ms ease,
+    box-shadow 150ms ease;
+}
+
+.analyst-input::placeholder,
+.analyst-textarea::placeholder {
+  color: rgba(255, 255, 255, 0.35);
+}
+
+.analyst-input:focus,
+.analyst-select:focus,
+.analyst-textarea:focus {
+  border-color: rgba(124, 92, 255, 0.5);
+  background: rgba(255, 255, 255, 0.05);
+  box-shadow: 0 0 0 3px rgba(124, 92, 255, 0.12);
+}
+
+.analyst-select {
+  appearance: none;
+  padding-right: 2.5rem;
+}
+
+.analyst-textarea {
+  resize: vertical;
+}
+
+.analyst-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.045);
+  padding: 0.25rem 0.55rem;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.analyst-chip-accent {
+  border-color: rgba(124, 92, 255, 0.35);
+  background: rgba(124, 92, 255, 0.12);
+  color: #cdbcff;
+}
+
+.analyst-chip-cyan {
+  border-color: rgba(44, 208, 255, 0.3);
+  background: rgba(44, 208, 255, 0.1);
+  color: #b1e9ff;
+}
+
+.analyst-chip-good {
+  border-color: rgba(52, 211, 153, 0.3);
+  background: rgba(52, 211, 153, 0.1);
+  color: #bbf7d0;
+}
+
+.analyst-chip-warn {
+  border-color: rgba(251, 191, 36, 0.3);
+  background: rgba(251, 191, 36, 0.1);
+  color: #fde68a;
+}
+
+.analyst-score-bar {
+  width: 3.5rem;
+  height: 0.28rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.analyst-score-bar > div {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #7c5cff, #2cd0ff);
+}
+
+.analyst-card-hover {
+  transition:
+    transform 180ms ease,
+    border-color 180ms ease,
+    background 180ms ease;
+}
+
+.analyst-card-hover:hover {
+  transform: translateY(-2px);
+  border-color: rgba(255, 255, 255, 0.16);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.03));
+}
+
+.analyst-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.16) transparent;
+}
+
+.analyst-scrollbar::-webkit-scrollbar {
+  width: 8px;
+}
+
+.analyst-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.analyst-scrollbar::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+}
