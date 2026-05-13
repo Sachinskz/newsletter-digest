@@ -22,7 +22,7 @@ Newsletter Digest is a Busibox app MVP that connects a user's Microsoft 365 mail
 ## Required Environment Variables
 
 ```bash
-MS_CLIENT_ID=4b79b4e6-85d1-4070-ac3a-68ab18605fbd
+MS_CLIENT_ID=<your-azure-app-client-id>
 MS_CLIENT_SECRET=<from Azure app registration>
 MS_REDIRECT_URI=http://localhost:3002/api/oauth/callback
 ```

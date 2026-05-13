@@ -16,10 +16,13 @@ function getTokenUrl(): string {
 export const MICROSOFT_SCOPES = ["offline_access", "User.Read", "Mail.Read"];
 
 export function getMicrosoftConfig() {
-  const clientId = process.env.MS_CLIENT_ID || "4b79b4e6-85d1-4070-ac3a-68ab18605fbd";
+  const clientId = process.env.MS_CLIENT_ID;
   const clientSecret = process.env.MS_CLIENT_SECRET;
   const redirectUri = process.env.MS_REDIRECT_URI;
 
+  if (!clientId) {
+    throw new Error("MS_CLIENT_ID is not configured");
+  }
   if (!clientSecret) {
     throw new Error("MS_CLIENT_SECRET is not configured");
   }
