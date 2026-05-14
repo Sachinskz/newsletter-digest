@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   getPreferences: vi.fn(),
   getSummaryForEmail: vi.fn(),
   markEmailSummarized: vi.fn(),
+  requestNewsletterSummary: vi.fn(),
 }));
 
 vi.mock("@/lib/auth-middleware", () => ({
@@ -23,6 +24,14 @@ vi.mock("@/lib/data-api-client", () => ({
   getSummaryForEmail: mocks.getSummaryForEmail,
   markEmailSummarized: mocks.markEmailSummarized,
 }));
+
+vi.mock("@/lib/summarization", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/summarization")>("@/lib/summarization");
+  return {
+    ...actual,
+    requestNewsletterSummary: mocks.requestNewsletterSummary,
+  };
+});
 
 import { POST } from "./route";
 
@@ -60,13 +69,6 @@ describe("newsletter summarize route", () => {
       topics: [],
       readTimeMinutes: 2,
     };
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ output: summaryOutput }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }),
-    );
-
     mocks.requireAuthWithTokenExchange
       .mockResolvedValueOnce({ apiToken: "agent-token" })
       .mockResolvedValueOnce({ apiToken: "data-token" });
@@ -74,6 +76,7 @@ describe("newsletter summarize route", () => {
     mocks.getEmailById.mockResolvedValue(newsletter);
     mocks.getSummaryForEmail.mockResolvedValue(null);
     mocks.getPreferences.mockResolvedValue({ summaryFormat: "key_insights" });
+    mocks.requestNewsletterSummary.mockResolvedValue(summaryOutput);
     mocks.createSummary.mockResolvedValue({ id: "summary-1", emailId: "email-1", format: "key_insights", ...summaryOutput });
 
     const response = await POST(
@@ -82,9 +85,52 @@ describe("newsletter summarize route", () => {
     );
 
     expect(response.status).toBe(200);
-    const body = JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string);
-    expect(body.input.prompt).toContain("Preferred format: Key Insights.");
+    expect(mocks.requestNewsletterSummary).toHaveBeenCalledWith(
+      "agent-token",
+      newsletter,
+      "key_insights",
+    );
     expect(mocks.createSummary).toHaveBeenCalledWith("data-token", "summaries-doc", "email-1", summaryOutput, "key_insights");
-    fetchMock.mockRestore();
+  });
+
+  it("falls back to a deterministic summary when agent generation fails", async () => {
+    const newsletter = {
+      id: "email-2",
+      senderEmail: "news@example.com",
+      senderName: "Example News",
+      subject: "Weekly AI briefing",
+      receivedAt: "2026-05-13T10:00:00.000Z",
+      bodyPlainText: "A useful newsletter body with enough detail to create a fallback summary for the reader.",
+      bodyLengthChars: 84,
+      hasBeenSummarized: false,
+      fetchedAt: "2026-05-13T10:01:00.000Z",
+    };
+
+    mocks.requireAuthWithTokenExchange
+      .mockResolvedValueOnce({ apiToken: "agent-token" })
+      .mockResolvedValueOnce({ apiToken: "data-token" });
+    mocks.ensureDataDocuments.mockResolvedValue({ emails: "emails-doc", summaries: "summaries-doc", preferences: "preferences-doc" });
+    mocks.getEmailById.mockResolvedValue(newsletter);
+    mocks.getSummaryForEmail.mockResolvedValue(null);
+    mocks.getPreferences.mockResolvedValue({ summaryFormat: "bullet_points" });
+    mocks.requestNewsletterSummary.mockRejectedValue(new Error("agent timeout"));
+    mocks.createSummary.mockResolvedValue({ id: "summary-2", emailId: "email-2" });
+
+    const response = await POST(
+      new NextRequest("http://localhost:3002/api/newsletters/email-2/summarize", { method: "POST" }),
+      { params: Promise.resolve({ id: "email-2" }) },
+    );
+
+    expect(response.status).toBe(200);
+    expect(mocks.createSummary).toHaveBeenCalledWith(
+      "data-token",
+      "summaries-doc",
+      "email-2",
+      expect.objectContaining({
+        title: "Weekly AI briefing",
+        sentiment: "neutral",
+      }),
+      "bullet_points",
+    );
   });
 });

@@ -12,6 +12,8 @@ import type {
   ConnectionStatus,
   GeneratedContent,
   GeneratedContentOutput,
+  NewsletterClientMatch,
+  NewsletterClientProfile,
   NewsletterConnection,
   NewsletterEmail,
   NewsletterPreferences,
@@ -30,6 +32,8 @@ export const DOCUMENTS = {
   SUMMARIES: "newsletter-digest-summaries",
   PREFERENCES: "newsletter-digest-preferences",
   GENERATED_CONTENT: "newsletter-digest-generated-content",
+  CLIENTS: "newsletter-digest-clients",
+  CLIENT_MATCHES: "newsletter-digest-client-matches",
 } as const;
 
 export const DEFAULT_CONNECTION_ID = "microsoft-primary";
@@ -172,6 +176,60 @@ export const generatedContentSchema: AppDataSchema = {
   graphRelationships: [],
 };
 
+export const clientProfileSchema: AppDataSchema = {
+  fields: {
+    ...baseFields,
+    name: { type: "string", required: true, label: "Client Name", order: 1 },
+    sector: { type: "string", required: true, label: "Sector", order: 2 },
+    topics: { type: "string", required: true, label: "Topics JSON", hidden: true },
+    priorities: { type: "string", required: true, label: "Priorities", multiline: true, order: 3 },
+    accountOwner: { type: "string", label: "Account Owner", order: 4 },
+    relationshipStage: { type: "string", label: "Relationship Stage", order: 5 },
+    notes: { type: "string", label: "Notes", multiline: true, order: 6 },
+    matchThreshold: { type: "number", label: "Match Threshold", order: 7 },
+    createdAt: { type: "string", required: true, readonly: true, order: 8 },
+    updatedAt: { type: "string", required: true, readonly: true, order: 9 },
+  },
+  displayName: "Newsletter Client Profiles",
+  itemLabel: "Client Profile",
+  sourceApp: APP_ID,
+  visibility: "personal",
+  allowSharing: false,
+  graphNode: "",
+  graphRelationships: [],
+};
+
+export const clientMatchSchema: AppDataSchema = {
+  fields: {
+    ...baseFields,
+    clientId: { type: "string", required: true, label: "Client ID", hidden: true },
+    clientName: { type: "string", required: true, label: "Client Name", order: 1 },
+    clientSector: { type: "string", required: true, label: "Client Sector", order: 2 },
+    articleId: { type: "string", required: true, label: "Article ID", hidden: true },
+    articleTitle: { type: "string", required: true, label: "Article Title", order: 3 },
+    articleSource: { type: "string", required: true, label: "Article Source", order: 4 },
+    articleCategory: { type: "string", required: true, label: "Article Category", order: 5 },
+    articleSummary: { type: "string", required: true, label: "Article Summary", multiline: true, order: 6 },
+    articleWhy: { type: "string", required: true, label: "Article Why", multiline: true, order: 7 },
+    articleReceivedAt: { type: "string", required: true, label: "Article Received", order: 8 },
+    articleImportance: { type: "number", required: true, label: "Article Importance", order: 9 },
+    articleNovelty: { type: "number", required: true, label: "Article Novelty", order: 10 },
+    articleUrgency: { type: "number", required: true, label: "Article Urgency", order: 11 },
+    articleCompanies: { type: "string", required: true, label: "Article Companies JSON", hidden: true },
+    articleTopics: { type: "string", required: true, label: "Article Topics JSON", hidden: true },
+    score: { type: "number", required: true, label: "Match Score", order: 12 },
+    reason: { type: "string", required: true, label: "Match Reason", multiline: true, order: 13 },
+    matchedAt: { type: "string", required: true, readonly: true, order: 14 },
+  },
+  displayName: "Newsletter Client Matches",
+  itemLabel: "Client Match",
+  sourceApp: APP_ID,
+  visibility: "personal",
+  allowSharing: false,
+  graphNode: "",
+  graphRelationships: [],
+};
+
 export async function ensureDataDocuments(token: string): Promise<{
   connections: string;
   subscriptions: string;
@@ -179,6 +237,8 @@ export async function ensureDataDocuments(token: string): Promise<{
   summaries: string;
   preferences: string;
   generatedContent: string;
+  clients: string;
+  clientMatches: string;
 }> {
   const ids = await ensureDocuments(
     token,
@@ -189,10 +249,190 @@ export async function ensureDataDocuments(token: string): Promise<{
       summaries: { name: DOCUMENTS.SUMMARIES, schema: summarySchema, visibility: "personal" },
       preferences: { name: DOCUMENTS.PREFERENCES, schema: preferencesSchema, visibility: "personal" },
       generatedContent: { name: DOCUMENTS.GENERATED_CONTENT, schema: generatedContentSchema, visibility: "personal" },
+      clients: { name: DOCUMENTS.CLIENTS, schema: clientProfileSchema, visibility: "personal" },
+      clientMatches: { name: DOCUMENTS.CLIENT_MATCHES, schema: clientMatchSchema, visibility: "personal" },
     },
     APP_ID,
   );
-  return ids as { connections: string; subscriptions: string; emails: string; summaries: string; preferences: string; generatedContent: string };
+  return ids as {
+    connections: string;
+    subscriptions: string;
+    emails: string;
+    summaries: string;
+    preferences: string;
+    generatedContent: string;
+    clients: string;
+    clientMatches: string;
+  };
+}
+
+function parseClientTopics(value: string): string[] {
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function inflateClientProfile(record: Omit<NewsletterClientProfile, "topics"> & { topics: string }): NewsletterClientProfile {
+  return {
+    ...record,
+    topics: parseClientTopics(record.topics),
+  };
+}
+
+function serializeClientProfile(input: NewsletterClientProfile): Record<string, unknown> {
+  return asRecord({
+    ...input,
+    topics: JSON.stringify(input.topics),
+  });
+}
+
+type StoredClientMatch = Omit<NewsletterClientMatch, "articleCompanies" | "articleTopics"> & {
+  articleCompanies: string;
+  articleTopics: string;
+};
+
+function parseStoredStringArray(value: string): string[] {
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function inflateClientMatch(record: StoredClientMatch): NewsletterClientMatch {
+  return {
+    ...record,
+    articleCompanies: parseStoredStringArray(record.articleCompanies),
+    articleTopics: parseStoredStringArray(record.articleTopics),
+  };
+}
+
+function serializeClientMatch(input: NewsletterClientMatch): Record<string, unknown> {
+  return asRecord({
+    ...input,
+    articleCompanies: JSON.stringify(input.articleCompanies),
+    articleTopics: JSON.stringify(input.articleTopics),
+  });
+}
+
+export async function listClientProfiles(
+  token: string,
+  documentId: string,
+): Promise<NewsletterClientProfile[]> {
+  const result = await queryRecords<Omit<NewsletterClientProfile, "topics"> & { topics: string }>(token, documentId, {
+    orderBy: [{ field: "updatedAt", direction: "desc" }],
+    limit: 100,
+  });
+  return result.records.map(inflateClientProfile);
+}
+
+export async function getClientProfileById(
+  token: string,
+  documentId: string,
+  id: string,
+): Promise<NewsletterClientProfile | null> {
+  const result = await queryRecords<Omit<NewsletterClientProfile, "topics"> & { topics: string }>(token, documentId, {
+    where: { field: "id", op: "eq", value: id },
+    limit: 1,
+  });
+  const record = result.records[0];
+  return record ? inflateClientProfile(record) : null;
+}
+
+export async function createClientProfile(
+  token: string,
+  documentId: string,
+  input: Omit<NewsletterClientProfile, "id" | "createdAt" | "updatedAt">,
+): Promise<NewsletterClientProfile> {
+  const now = getNow();
+  const profile: NewsletterClientProfile = {
+    id: generateId(),
+    createdAt: now,
+    updatedAt: now,
+    ...input,
+  };
+  await insertRecords(token, documentId, [serializeClientProfile(profile)]);
+  return profile;
+}
+
+export async function updateClientProfile(
+  token: string,
+  documentId: string,
+  id: string,
+  updates: Partial<Omit<NewsletterClientProfile, "id" | "createdAt" | "updatedAt">>,
+): Promise<NewsletterClientProfile | null> {
+  const existing = await getClientProfileById(token, documentId, id);
+  if (!existing) return null;
+
+  const profile: NewsletterClientProfile = {
+    ...existing,
+    ...updates,
+    updatedAt: getNow(),
+  };
+  await updateRecords(token, documentId, serializeClientProfile(profile), { field: "id", op: "eq", value: id });
+  return profile;
+}
+
+export async function deleteClientProfile(
+  token: string,
+  documentId: string,
+  id: string,
+): Promise<void> {
+  await deleteRecords(token, documentId, { field: "id", op: "eq", value: id });
+}
+
+export async function listClientMatches(
+  token: string,
+  documentId: string,
+  filters?: { clientId?: string; articleId?: string },
+): Promise<NewsletterClientMatch[]> {
+  const and: Array<{ field: string; op: "eq"; value: string }> = [];
+  if (filters?.clientId) and.push({ field: "clientId", op: "eq", value: filters.clientId });
+  if (filters?.articleId) and.push({ field: "articleId", op: "eq", value: filters.articleId });
+  const where = and.length === 0 ? undefined : and.length === 1 ? and[0] : { and };
+
+  const result = await queryRecords<StoredClientMatch>(token, documentId, {
+    ...(where ? { where } : {}),
+    orderBy: [
+      { field: "score", direction: "desc" },
+      { field: "matchedAt", direction: "desc" },
+    ],
+    limit: 500,
+  });
+  return result.records.map(inflateClientMatch);
+}
+
+export async function replaceClientMatchesForClient(
+  token: string,
+  documentId: string,
+  clientId: string,
+  matches: Array<Omit<NewsletterClientMatch, "id">>,
+): Promise<void> {
+  await deleteRecords(token, documentId, { field: "clientId", op: "eq", value: clientId });
+  if (matches.length === 0) return;
+
+  await insertRecords(
+    token,
+    documentId,
+    matches.map((match) =>
+      serializeClientMatch({
+        id: generateId(),
+        ...match,
+      }),
+    ),
+  );
+}
+
+export async function deleteClientMatchesForClient(
+  token: string,
+  documentId: string,
+  clientId: string,
+): Promise<void> {
+  await deleteRecords(token, documentId, { field: "clientId", op: "eq", value: clientId });
 }
 
 export async function getConnection(
@@ -428,6 +668,14 @@ export async function getSummaryForEmail(
     limit: 1,
   });
   return result.records[0] || null;
+}
+
+export async function deleteSummaryForEmail(
+  token: string,
+  documentId: string,
+  emailId: string,
+): Promise<void> {
+  await deleteRecords(token, documentId, { field: "emailId", op: "eq", value: emailId });
 }
 
 export async function listSummaries(

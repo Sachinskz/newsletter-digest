@@ -7,7 +7,7 @@ import {
   type LibraryArticle,
 } from "@/lib/editorial-intelligence";
 import { CONTENT_KINDS, CONTENT_TONES, getContentKindLabel } from "@/lib/content-generation";
-import type { ContentKind, ContentTone, GeneratedContent, NewsletterEmail, NewsletterSummary } from "@/lib/types";
+import type { ContentKind, ContentTone, GeneratedContent, NewsletterClientProfile, NewsletterEmail, NewsletterSummary } from "@/lib/types";
 
 const KIND_ICONS: Record<ContentKind, typeof Linkedin> = {
   linkedin: Linkedin,
@@ -20,8 +20,10 @@ const KIND_ICONS: Record<ContentKind, typeof Linkedin> = {
 
 export default function GeneratePage() {
   const [articles, setArticles] = useState<LibraryArticle[]>([]);
+  const [clients, setClients] = useState<NewsletterClientProfile[]>([]);
   const [recentDrafts, setRecentDrafts] = useState<GeneratedContent[]>([]);
   const [articleId, setArticleId] = useState("");
+  const [clientId, setClientId] = useState("");
   const [kind, setKind] = useState<ContentKind>("linkedin");
   const [tone, setTone] = useState<ContentTone>("Analytical");
   const [generated, setGenerated] = useState<GeneratedContent | null>(null);
@@ -36,14 +38,16 @@ export default function GeneratePage() {
     async function load() {
       setError(null);
       try {
-        const [newslettersRes, summariesRes, contentRes] = await Promise.all([
+        const [newslettersRes, summariesRes, contentRes, clientsRes] = await Promise.all([
           fetch("/api/newsletters"),
           fetch("/api/summaries"),
           fetch("/api/content"),
+          fetch("/api/clients"),
         ]);
         const newslettersData = await newslettersRes.json();
         const summariesData = await summariesRes.json();
         const contentData = await contentRes.json();
+        const clientsData = await clientsRes.json();
 
         if (!alive) return;
 
@@ -51,19 +55,24 @@ export default function GeneratePage() {
           (newslettersData.newsletters || []) as NewsletterEmail[],
           (summariesData.summaries || []) as NewsletterSummary[],
         );
+        const nextClients = (clientsData.clients || []) as NewsletterClientProfile[];
         setArticles(nextArticles);
+        setClients(nextClients);
         const params = new URLSearchParams(window.location.search);
         const requestedArticle = params.get("article");
         const requestedKind = params.get("kind");
         setArticleId(nextArticles.some((item) => item.id === requestedArticle) ? requestedArticle || "" : nextArticles[0]?.id || "");
-        if (CONTENT_KINDS.some((item) => item.id === requestedKind && !item.needsClient)) {
+        if (CONTENT_KINDS.some((item) => item.id === requestedKind && (!item.needsClient || nextClients.length > 0))) {
           setKind(requestedKind as ContentKind);
         }
+        setClientId(nextClients[0]?.id || "");
         setRecentDrafts(contentData.content || []);
       } catch (loadError) {
         if (!alive) return;
         setArticles([]);
+        setClients([]);
         setArticleId("");
+        setClientId("");
         setError(loadError instanceof Error ? loadError.message : "Could not load generator context");
       } finally {
         if (alive) setLoading(false);
@@ -77,11 +86,16 @@ export default function GeneratePage() {
   }, []);
 
   const article = useMemo(() => articles.find((item) => item.id === articleId) || articles[0], [articleId, articles]);
+  const selectedClient = useMemo(() => clients.find((item) => item.id === clientId) || clients[0] || null, [clientId, clients]);
   const selectedKind = CONTENT_KINDS.find((item) => item.id === kind) || CONTENT_KINDS[0];
-  const availableKinds = CONTENT_KINDS.filter((item) => !item.needsClient);
+  const availableKinds = CONTENT_KINDS.filter((item) => !item.needsClient || clients.length > 0);
 
   async function generate() {
     if (!article) return;
+    if (selectedKind.needsClient && !selectedClient) {
+      setError("Create a client profile first, then select it for client-email generation.");
+      return;
+    }
     setGenerating(true);
     setGenerated(null);
     setError(null);
@@ -93,7 +107,7 @@ export default function GeneratePage() {
           article,
           kind,
           tone,
-          client: null,
+          client: selectedKind.needsClient ? selectedClient : null,
         }),
       });
       const data = await res.json();
@@ -145,7 +159,7 @@ export default function GeneratePage() {
             {CONTENT_KINDS.map((item) => {
               const active = kind === item.id;
               const Icon = KIND_ICONS[item.id];
-              const disabled = item.needsClient;
+                  const disabled = Boolean(item.needsClient && clients.length === 0);
               return (
                 <button
                   key={item.id}
@@ -162,15 +176,42 @@ export default function GeneratePage() {
                 >
                   <Icon size={14} className={disabled ? "text-white/35" : active ? "text-violet-300" : "text-white/60"} />
                   <div className={`mt-1.5 text-[12.5px] font-medium ${active ? "text-white" : "text-white/75"}`}>{item.label}</div>
-                  {disabled ? <div className="mt-1 text-[11px] text-white/45">Client profiles not wired yet</div> : null}
+                  {disabled ? <div className="mt-1 text-[11px] text-white/45">Add a client profile first</div> : null}
                 </button>
               );
             })}
           </div>
         </div>
 
+        {selectedKind.needsClient ? (
+          <div className="analyst-glass rounded-2xl p-5">
+            <div className="mb-3 text-[13px] font-medium text-white">3. Client context</div>
+            {clients.length > 0 ? (
+              <>
+                <select className="analyst-select" value={clientId} onChange={(event) => setClientId(event.target.value)}>
+                  {clients.map((client) => (
+                    <option key={client.id} value={client.id}>
+                      {client.name} · {client.sector}
+                    </option>
+                  ))}
+                </select>
+                {selectedClient ? (
+                  <div className="mt-3 rounded-lg border border-white/5 bg-white/[0.03] p-3 text-[12.5px] leading-relaxed text-white/68">
+                    <div className="font-medium text-white">{selectedClient.name}</div>
+                    <div className="mt-1 text-white/55">{selectedClient.priorities}</div>
+                  </div>
+                ) : null}
+              </>
+            ) : (
+              <div className="rounded-lg border border-white/5 bg-white/[0.03] p-3 text-[12.5px] leading-relaxed text-white/55">
+                No client profiles are available yet. Create one from the Client Relevance page.
+              </div>
+            )}
+          </div>
+        ) : null}
+
         <div className="analyst-glass rounded-2xl p-5">
-          <div className="mb-3 text-[13px] font-medium text-white">3. Tone</div>
+          <div className="mb-3 text-[13px] font-medium text-white">{selectedKind.needsClient ? "4. Tone" : "3. Tone"}</div>
           <div className="flex flex-wrap gap-1.5">
             {CONTENT_TONES.map((item) => (
               <button
@@ -270,9 +311,9 @@ export default function GeneratePage() {
           </div>
         </div>
 
-        {availableKinds.length !== CONTENT_KINDS.length ? (
+        {clients.length === 0 ? (
           <div className="mt-5 rounded-xl border border-amber-300/20 bg-amber-300/10 px-4 py-3 text-[12.5px] leading-relaxed text-amber-100/80">
-            Client email generation is hidden behind client-profile backend work. The other generation modes are real and will use stored newsletters plus live agent-api calls.
+            Client email generation is available once at least one client profile exists. The other generation modes already use stored newsletters plus live agent-api calls.
           </div>
         ) : null}
       </section>

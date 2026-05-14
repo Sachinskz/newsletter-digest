@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { buildSummaryPrompt, isSummaryFormat, parseSummaryOutput, SUMMARY_FORMAT_OPTIONS } from "./summarization";
+import {
+  buildFallbackSummary,
+  buildSummaryPrompt,
+  isSummaryFormat,
+  parseSummaryOutput,
+  prepareNewsletterTextForSummary,
+  SUMMARY_FORMAT_OPTIONS,
+} from "./summarization";
 import type { NewsletterEmail, SummaryOutput } from "./types";
 
 const email: NewsletterEmail = {
@@ -51,6 +58,75 @@ describe("summarization helpers", () => {
     };
 
     expect(parseSummaryOutput(output)).toEqual(output);
+  });
+
+  it("accepts wrapped JSON string output", () => {
+    const output: SummaryOutput = {
+      title: "AI briefing",
+      tldr: "Useful updates.",
+      keyPoints: [{ point: "Model releases", importance: "high" }],
+      actionItems: [{ action: "Share with team", urgency: "medium" }],
+      sentiment: "positive",
+      topics: ["AI", "Operations"],
+      readTimeMinutes: 4,
+    };
+
+    expect(
+      parseSummaryOutput({
+        output: `\`\`\`json
+${JSON.stringify(output, null, 2)}
+\`\`\``,
+      }),
+    ).toEqual(output);
+  });
+
+  it("accepts nested result wrappers", () => {
+    const output: SummaryOutput = {
+      title: "AI briefing",
+      tldr: "Useful updates.",
+      keyPoints: [{ point: "Model releases", importance: "high" }],
+      actionItems: [{ action: "Share with team", urgency: "medium" }],
+      sentiment: "positive",
+      topics: ["AI", "Operations"],
+      readTimeMinutes: 4,
+    };
+
+    expect(
+      parseSummaryOutput({
+        result: {
+          response: {
+            newsletter_summary: output,
+          },
+        },
+      }),
+    ).toEqual(output);
+  });
+
+  it("builds a deterministic fallback summary from the newsletter body", () => {
+    const output = buildFallbackSummary(email, "bullet_points");
+
+    expect(output.title).toContain("Weekly AI briefing");
+    expect(output.tldr.length).toBeGreaterThan(0);
+    expect(output.keyPoints.length).toBeGreaterThan(0);
+    expect(output.actionItems.length).toBeGreaterThan(0);
+    expect(output.sentiment).toBe("neutral");
+    expect(output.readTimeMinutes).toBeGreaterThan(0);
+  });
+
+  it("prepares newsletter text by stripping obvious promo/footer noise", () => {
+    const prepared = prepareNewsletterTextForSummary(`
+Presented by Example Corp
+Important market update for operators.
+Privacy Statement | Unsubscribe
+This email was sent from an unmonitored mailbox.
+Another real paragraph with useful context.
+`);
+
+    expect(prepared).toContain("Important market update for operators.");
+    expect(prepared).toContain("Another real paragraph with useful context.");
+    expect(prepared).not.toContain("Presented by Example Corp");
+    expect(prepared).not.toContain("Privacy Statement");
+    expect(prepared).not.toContain("unmonitored mailbox");
   });
 
   it("rejects malformed output shape", () => {

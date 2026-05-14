@@ -18,6 +18,7 @@ import {
   Tags,
   TrendingUp,
 } from "lucide-react";
+import { deriveCategory } from "@/lib/editorial-intelligence";
 import { DEFAULT_SUMMARY_FORMAT, getSummaryFormatOption } from "@/lib/summarization";
 import type { NewsletterEmail, NewsletterPreferences, NewsletterSummary, SummaryFormat } from "@/lib/types";
 
@@ -98,7 +99,7 @@ export default function DigestPage() {
     return newsletters.map((newsletter, index) => {
       const summary = summaryByEmailId.get(newsletter.id);
       const topics = parseJsonArray<string>(summary?.topics || "");
-      const category = topics[0] ? titleCase(topics[0]) : summary ? "Executive Brief" : "Inbox Queue";
+      const category = summary ? deriveCategory(newsletter.subject, summary.tldr, topics) : "Inbox Queue";
       return {
         id: newsletter.id,
         title: summary?.title || newsletter.subject,
@@ -108,7 +109,7 @@ export default function DigestPage() {
         preview: trimText(newsletter.bodyPlainText, 160),
         importance: Math.max(55, 96 - index * 5 - (summary ? 0 : 10)),
         savedFormat: summary?.format ? getSummaryFormatOption(summary.format).title : undefined,
-        href: `/newsletters/${newsletter.id}`,
+        href: `/library?article=${encodeURIComponent(newsletter.id)}`,
       };
     });
   }, [newsletters, summaryByEmailId]);
@@ -210,7 +211,7 @@ export default function DigestPage() {
             </ol>
 
             <div className="flex items-center gap-2 mt-5 pt-5 border-t border-white/5 flex-wrap">
-              <Link href="/newsletters" className="inline-flex items-center gap-2 rounded-[10px] border border-[#7c5cff]/60 bg-[linear-gradient(135deg,#7c5cff,#5b3df5)] px-[14px] py-[8px] text-[13px] font-medium text-white shadow-[0_6px_24px_-8px_rgba(124,92,255,.6)]">
+              <Link href="/library" className="inline-flex items-center gap-2 rounded-[10px] border border-[#7c5cff]/60 bg-[linear-gradient(135deg,#7c5cff,#5b3df5)] px-[14px] py-[8px] text-[13px] font-medium text-white shadow-[0_6px_24px_-8px_rgba(124,92,255,.6)]">
                 <FileText size={14} /> Open full brief
               </Link>
               <Link href="/settings" className="inline-flex items-center gap-2 rounded-[10px] border border-white/10 bg-white/[0.04] px-[14px] py-[8px] text-[13px] font-medium text-white transition hover:bg-white/[0.08]">
@@ -226,7 +227,7 @@ export default function DigestPage() {
         <div className="rounded-2xl border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0.02))] backdrop-blur-[14px] p-5">
           <div className="text-[11px] uppercase tracking-wider text-white/40 mb-3">Quick actions</div>
           <div className="grid grid-cols-2 gap-2">
-            <ActionTile icon={Linkedin} label="LinkedIn post" sub="From top story" href={briefArticles[0]?.href || "/newsletters"} />
+            <ActionTile icon={Linkedin} label="LinkedIn post" sub="From top story" href={briefArticles[0]?.href || "/library"} />
             <ActionTile icon={Mail} label="Format choice" sub={formatOption.title} href="/settings" />
             <ActionTile icon={Inbox} label="Ingest" sub="Open queue" href="/ingest" />
             <ActionTile icon={BriefcaseBusiness} label="Settings" sub="OAuth status" href="/settings" />
@@ -236,7 +237,7 @@ export default function DigestPage() {
         <div className="rounded-2xl border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0.02))] backdrop-blur-[14px] p-5">
           <div className="flex items-center justify-between mb-3">
             <div className="text-[11px] uppercase tracking-wider text-white/40">Top stories</div>
-            <Link href="/newsletters" className="inline-flex items-center gap-1 rounded-[10px] px-2 py-1 text-[11px] text-white/50 transition hover:bg-white/[0.04] hover:text-white">
+            <Link href="/library" className="inline-flex items-center gap-1 rounded-[10px] px-2 py-1 text-[11px] text-white/50 transition hover:bg-white/[0.04] hover:text-white">
               View all <ChevronRight size={11} />
             </Link>
           </div>
@@ -312,7 +313,7 @@ export default function DigestPage() {
               title="Needs summary"
               subtitle={`${pending.length} newsletter${pending.length === 1 ? "" : "s"} waiting`}
               body={pending.length > 0 ? "These newsletters are already stored and ready for summarization." : "Nothing is waiting right now. New synced newsletters will queue here."}
-              actionHref="/newsletters"
+              actionHref="/library"
               actionLabel="Open queue"
               chipLabel={pending.length > 0 ? `match ${pending.length}` : "clear"}
             />
@@ -413,13 +414,6 @@ function parseJsonArray<T>(value: string): T[] {
   } catch {
     return [];
   }
-}
-
-function titleCase(value: string): string {
-  return value
-    .split(/[\s_-]+/)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
 }
 
 function trimText(value: string, maxLength: number): string {

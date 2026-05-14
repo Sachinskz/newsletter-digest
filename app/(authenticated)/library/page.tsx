@@ -2,21 +2,22 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Bookmark, ChevronRight, Linkedin, Mail, Search, X } from "lucide-react";
+import { useSearchParams } from "next/navigation";
+import { Bookmark, ChevronRight, Linkedin, ListChecks, Mail, Search, Sparkles, X } from "lucide-react";
 import {
   categoryTone,
-  DEFAULT_CLIENTS,
   deriveLibraryArticles,
   formatReceivedAt,
-  matchScore,
   type LibraryArticle,
 } from "@/lib/editorial-intelligence";
-import type { NewsletterEmail, NewsletterSummary } from "@/lib/types";
+import type { NewsletterClientMatch, NewsletterEmail, NewsletterSummary } from "@/lib/types";
 
 type SortKey = "importance" | "novelty" | "urgency";
 
 export default function LibraryPage() {
+  const searchParams = useSearchParams();
   const [articles, setArticles] = useState<LibraryArticle[]>([]);
+  const [matchesByArticleId, setMatchesByArticleId] = useState<Record<string, NewsletterClientMatch[]>>({});
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("All");
@@ -25,14 +26,21 @@ export default function LibraryPage() {
   const [savedIds, setSavedIds] = useState<string[]>([]);
   const [selectedArticle, setSelectedArticle] = useState<LibraryArticle | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const requestedArticleId = searchParams.get("article");
+
   useEffect(() => {
     let alive = true;
 
     async function loadArticles() {
       try {
-        const [newslettersRes, summariesRes] = await Promise.all([fetch("/api/newsletters"), fetch("/api/summaries")]);
+        const [newslettersRes, summariesRes, relevanceRes] = await Promise.all([
+          fetch("/api/newsletters"),
+          fetch("/api/summaries"),
+          fetch("/api/client-relevance"),
+        ]);
         const newslettersData = await newslettersRes.json();
         const summariesData = await summariesRes.json();
+        const relevanceData = await relevanceRes.json().catch(() => ({}));
 
         if (!alive) return;
 
@@ -41,9 +49,20 @@ export default function LibraryPage() {
           (summariesData.summaries || []) as NewsletterSummary[],
         );
         setArticles(derived);
+        const groupedMatches = ((relevanceData.matches || []) as NewsletterClientMatch[]).reduce<Record<string, NewsletterClientMatch[]>>(
+          (accumulator, match) => {
+            if (!accumulator[match.articleId]) accumulator[match.articleId] = [];
+            accumulator[match.articleId].push(match);
+            return accumulator;
+          },
+          {},
+        );
+        Object.values(groupedMatches).forEach((entries) => entries.sort((a, b) => b.score - a.score));
+        setMatchesByArticleId(groupedMatches);
       } catch {
         if (!alive) return;
         setArticles([]);
+        setMatchesByArticleId({});
       } finally {
         if (alive) setLoading(false);
       }
@@ -54,6 +73,14 @@ export default function LibraryPage() {
       alive = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!requestedArticleId || articles.length === 0) return;
+    const matched = articles.find((article) => article.id === requestedArticleId);
+    if (matched) {
+      setSelectedArticle(matched);
+    }
+  }, [articles, requestedArticleId]);
 
   function showToast(message: string) {
     setToast(message);
@@ -129,9 +156,7 @@ export default function LibraryPage() {
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
             {filteredArticles.map((article) => {
               const saved = savedIds.includes(article.id);
-              const matches = DEFAULT_CLIENTS.map((client) => ({ client, score: matchScore(article, client) }))
-                .filter((entry) => entry.score >= 30)
-                .sort((a, b) => b.score - a.score);
+              const matches = matchesByArticleId[article.id] || [];
 
               return (
                 <div key={article.id} className="analyst-glass analyst-card-hover rounded-2xl p-5 flex flex-col">
@@ -174,8 +199,8 @@ export default function LibraryPage() {
                       <div className="mb-1 text-[11px] uppercase tracking-wider text-white/55">Relevant for</div>
                       <div className="flex flex-wrap gap-1.5">
                         {matches.slice(0, 3).map((entry) => (
-                          <span key={entry.client.id} className="analyst-chip analyst-chip-accent text-[10px]">
-                            {entry.client.name} · {entry.score}
+                          <span key={`${entry.clientId}-${entry.articleId}`} className="analyst-chip analyst-chip-accent text-[10px]">
+                            {entry.clientName} · {entry.score}
                           </span>
                         ))}
                       </div>
@@ -279,9 +304,60 @@ function ArticleDrawer({
             <p className="text-[14px] leading-relaxed text-white/80">{article.summary}</p>
           </div>
 
+          {article.summaryRecord ? (
+            <div className="mt-5 rounded-xl border border-violet-400/15 bg-violet-500/[0.05] p-4">
+              <div className="flex items-center gap-2 text-[11px] uppercase tracking-wider text-violet-200/80">
+                <Sparkles size={13} />
+                AI brief
+              </div>
+              <div className="mt-2 text-[16px] font-medium leading-snug text-white">{article.summaryRecord.title}</div>
+              <p className="mt-2 text-[13.5px] leading-6 text-white/78">{article.summaryRecord.tldr}</p>
+
+              {parseKeyPoints(article.summaryRecord.keyPoints).length > 0 ? (
+                <div className="mt-4">
+                  <div className="mb-2 flex items-center gap-2 text-[11px] uppercase tracking-wider text-white/40">
+                    <ListChecks size={13} />
+                    Key points
+                  </div>
+                  <ul className="space-y-2">
+                    {parseKeyPoints(article.summaryRecord.keyPoints).map((item, index) => (
+                      <li key={`${item.point}-${index}`} className="text-[13px] leading-6 text-white/72">
+                        <span className="font-semibold text-white/88">{item.importance}</span>: {item.point}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+
+              {parseActionItems(article.summaryRecord.actionItems).length > 0 ? (
+                <div className="mt-4">
+                  <div className="mb-2 text-[11px] uppercase tracking-wider text-white/40">Action items</div>
+                  <ul className="space-y-2">
+                    {parseActionItems(article.summaryRecord.actionItems).map((item, index) => (
+                      <li key={`${item.action}-${index}`} className="text-[13px] leading-6 text-white/72">
+                        <span className="font-semibold text-white/88">{item.urgency}</span>: {item.action}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+            </div>
+          ) : (
+            <div className="mt-5 rounded-xl border border-white/8 bg-white/[0.02] p-4 text-[13px] leading-6 text-white/58">
+              No AI summary has been generated for this article yet.
+            </div>
+          )}
+
           <div className="mt-5">
             <div className="mb-1.5 text-[11px] uppercase tracking-wider text-white/40">Why it matters</div>
             <p className="text-[14px] leading-relaxed text-white/80">{article.why}</p>
+          </div>
+
+          <div className="mt-5">
+            <div className="mb-1.5 text-[11px] uppercase tracking-wider text-white/40">Full article</div>
+            <div className="max-h-[42vh] overflow-y-auto rounded-xl border border-white/8 bg-white/[0.02] p-4 text-[13.5px] leading-7 text-white/72 whitespace-pre-wrap">
+              {article.body}
+            </div>
           </div>
 
           {article.companies.length || article.topics.length ? (
@@ -339,4 +415,38 @@ function ScoreCard({ label, value }: { label: string; value: number }) {
       </div>
     </div>
   );
+}
+
+function parseKeyPoints(value: string): Array<{ point: string; importance: string }> {
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed)
+      ? parsed.filter(
+          (item): item is { point: string; importance: string } =>
+            Boolean(item) &&
+            typeof item === "object" &&
+            typeof (item as { point?: unknown }).point === "string" &&
+            typeof (item as { importance?: unknown }).importance === "string",
+        )
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function parseActionItems(value: string): Array<{ action: string; urgency: string }> {
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed)
+      ? parsed.filter(
+          (item): item is { action: string; urgency: string } =>
+            Boolean(item) &&
+            typeof item === "object" &&
+            typeof (item as { action?: unknown }).action === "string" &&
+            typeof (item as { urgency?: unknown }).urgency === "string",
+        )
+      : [];
+  } catch {
+    return [];
+  }
 }

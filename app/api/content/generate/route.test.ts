@@ -54,15 +54,16 @@ describe("content generate route", () => {
     expect(mocks.createGeneratedContent).not.toHaveBeenCalled();
   });
 
-  it("invokes agent-api and persists generated content", async () => {
+  it("invokes llm completions and persists generated content", async () => {
     const output = {
       title: "LinkedIn draft",
       subject: "",
       body: "A useful LinkedIn post.",
       notes: "Review for specificity.",
     };
+    // The new pipeline calls /llm/completions which returns {content: "json string"}
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ output }), {
+      new Response(JSON.stringify({ model: "fast", content: JSON.stringify(output), usage: {}, finish_reason: "stop" }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       }),
@@ -83,7 +84,7 @@ describe("content generate route", () => {
 
     expect(response.status).toBe(200);
     const agentBody = JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string);
-    expect(agentBody.input.prompt).toContain("Output type: LinkedIn post");
+    expect(agentBody.messages[1].content).toContain("Output type: LinkedIn post");
     expect(mocks.createGeneratedContent).toHaveBeenCalledWith("data-token", "generated-doc", expect.objectContaining({
       articleId: "article-1",
       kind: "linkedin",

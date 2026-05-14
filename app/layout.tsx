@@ -37,10 +37,12 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  const portalUrl = process.env.NEXT_PUBLIC_BUSIBOX_PORTAL_URL || process.env.NEXT_PUBLIC_AI_PORTAL_URL || '';
-  const appId = process.env.APP_NAME || 'newsletter-digest';
-  const basePath = process.env.NEXT_PUBLIC_BASE_PATH || '';
-  const portalBasePath = process.env.NEXT_PUBLIC_PORTAL_BASE_PATH || '/portal';
+  const portalUrl = process.env.NEXT_PUBLIC_BUSIBOX_PORTAL_URL || process.env.NEXT_PUBLIC_AI_PORTAL_URL || "";
+  const appId = process.env.APP_NAME || "newsletter-digest";
+  const basePath = process.env.NEXT_PUBLIC_BASE_PATH || "";
+  const portalBasePath = process.env.NEXT_PUBLIC_PORTAL_BASE_PATH || "/portal";
+  const silentRefreshUrl = `${portalBasePath}/api/auth/sso/refresh`;
+  const customizationEndpoint = `${portalBasePath}/api/portal-customization`;
 
   const checkIntervalMs = process.env.NEXT_PUBLIC_AUTH_CHECK_INTERVAL_MS
     ? parseInt(process.env.NEXT_PUBLIC_AUTH_CHECK_INTERVAL_MS, 10)
@@ -55,7 +57,7 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body className={`${sora.variable} ${fraunces.variable} ${inter.variable} ${geistMono.variable} antialiased`}>
-        <FetchWrapper skipAuthUrls={['/api/auth/session', '/api/logout', '/api/health']} />
+        <FetchWrapper skipAuthUrls={["/api/auth/session", "/api/logout", "/api/health"]} />
         <ThemeProvider>
           <SessionProvider
             appId={appId}
@@ -64,8 +66,9 @@ export default function RootLayout({
             checkIntervalMs={checkIntervalMs}
             refreshBufferMs={refreshBufferMs}
             tokenExpiresOverrideMs={tokenExpiresOverrideMs}
+            silentRefreshUrl={silentRefreshUrl}
           >
-            <CustomizationProvider apiEndpoint={`${portalBasePath}/api/portal-customization`}>
+            <CustomizationProvider apiEndpoint={customizationEndpoint}>
               {children}
               <VersionBar />
             </CustomizationProvider>

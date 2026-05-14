@@ -1,10 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAuthWithTokenExchange } from "@/lib/auth-middleware";
-import { GENERATED_CONTENT_SCHEMA, buildContentPrompt, isContentKind, isContentTone, parseGeneratedContentOutput } from "@/lib/content-generation";
+import { isContentKind, isContentTone, requestContentGeneration } from "@/lib/content-generation";
 import { createGeneratedContent, ensureDataDocuments } from "@/lib/data-api-client";
 import type { ClientProfile, LibraryArticle } from "@/lib/editorial-intelligence";
-
-const AGENT_API_URL = process.env.AGENT_API_URL || "http://localhost:8000";
 
 export async function POST(request: NextRequest) {
   const auth = await requireAuthWithTokenExchange(request, "agent-api");
@@ -32,41 +30,29 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Client email generation requires a client" }, { status: 400 });
   }
 
-  const res = await fetch(`${AGENT_API_URL}/runs/invoke`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${auth.apiToken}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      agent_name: process.env.NEWSLETTER_CONTENT_AGENT_NAME || "record-extractor",
-      input: { prompt: buildContentPrompt({ article, kind, tone, client }) },
-      response_schema: GENERATED_CONTENT_SCHEMA,
-      agent_tier: process.env.NEWSLETTER_CONTENT_AGENT_TIER || "simple",
-    }),
-  });
+  try {
+    const output = await requestContentGeneration(auth.apiToken, { article, kind, tone, client });
+    const ids = await ensureDataDocuments(dataAuth.apiToken);
+    const content = await createGeneratedContent(dataAuth.apiToken, ids.generatedContent, {
+      articleId: article.id,
+      articleTitle: article.title,
+      articleSource: article.source,
+      kind,
+      tone,
+      ...(client ? { clientName: client.name, clientSector: client.sector } : {}),
+      output,
+    });
 
-  const result = await res.json();
-  if (!res.ok || result.error) {
+    return NextResponse.json({ content });
+  } catch (error) {
     return NextResponse.json(
-      { error: "Failed to generate content", details: result.error || result },
+      {
+        error: "Failed to generate content",
+        details: error instanceof Error ? error.message : String(error),
+      },
       { status: 502 },
     );
   }
-
-  const output = parseGeneratedContentOutput(result.output);
-  const ids = await ensureDataDocuments(dataAuth.apiToken);
-  const content = await createGeneratedContent(dataAuth.apiToken, ids.generatedContent, {
-    articleId: article.id,
-    articleTitle: article.title,
-    articleSource: article.source,
-    kind,
-    tone,
-    ...(client ? { clientName: client.name, clientSector: client.sector } : {}),
-    output,
-  });
-
-  return NextResponse.json({ content });
 }
 
 function isLibraryArticle(value: unknown): value is LibraryArticle {

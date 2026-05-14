@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildInjectedCookieHeader } from "@/dev-server/proxy";
+import { buildInjectedCookieHeader, normalizeDevLoopPath } from "@/dev-server/proxy";
 
 describe("dev server cookie injection", () => {
   it("injects auth cookies when none are present", () => {
@@ -14,5 +14,12 @@ describe("dev server cookie injection", () => {
     expect(header).toContain("auth_token=fresh");
     expect(header).not.toContain("busibox-session=old");
     expect(header).not.toContain("auth_token=older");
+  });
+
+  it("normalizes /home auth loop landings on the proxy port", () => {
+    expect(
+      normalizeDevLoopPath("/home?returnUrl=http%3A%2F%2Flocalhost%3A3002%2F&reason=token_expired&appId=newsletter-digest"),
+    ).toBe("/");
+    expect(normalizeDevLoopPath("/library?reason=token_expired")).toBeNull();
   });
 });

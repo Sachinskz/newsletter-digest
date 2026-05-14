@@ -15,6 +15,7 @@ const article: LibraryArticle = {
   companies: ["OpenAI"],
   topics: ["agents", "workflow"],
   receivedAt: "2026-05-13T10:00:00.000Z",
+  body: "Agents are moving into structured enterprise workflows. This changes how operators evaluate AI platforms.",
 };
 
 describe("content generation helpers", () => {
@@ -29,6 +30,8 @@ describe("content generation helpers", () => {
         sector: "Financial Services",
         priorities: "Governed AI deployment",
         topics: ["regulation", "agents"],
+        createdAt: "2026-05-13T10:00:00.000Z",
+        updatedAt: "2026-05-13T10:00:00.000Z",
       },
     });
 

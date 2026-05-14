@@ -76,6 +76,42 @@ export interface NewsletterSummary {
   generatedAt: string;
 }
 
+export interface NewsletterClientProfile {
+  id: string;
+  name: string;
+  sector: string;
+  topics: string[];
+  priorities: string;
+  accountOwner?: string;
+  relationshipStage?: string;
+  notes?: string;
+  matchThreshold?: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface NewsletterClientMatch {
+  id: string;
+  clientId: string;
+  clientName: string;
+  clientSector: string;
+  articleId: string;
+  articleTitle: string;
+  articleSource: string;
+  articleCategory: string;
+  articleSummary: string;
+  articleWhy: string;
+  articleReceivedAt: string;
+  articleImportance: number;
+  articleNovelty: number;
+  articleUrgency: number;
+  articleCompanies: string[];
+  articleTopics: string[];
+  score: number;
+  reason: string;
+  matchedAt: string;
+}
+
 export interface GeneratedContent {
   id: string;
   articleId: string;
@@ -145,4 +181,22 @@ export interface SummaryOutput {
   sentiment: "positive" | "neutral" | "negative" | "mixed";
   topics: string[];
   readTimeMinutes: number;
+}
+
+/** Output of step-1 topic classification */
+export interface TopicSegment {
+  topic: string;
+  headline: string;
+  /** The slice of newsletter body text that belongs to this topic */
+  textSlice: string;
+}
+
+/** Per-topic summary produced by step-2 */
+export interface TopicSummary {
+  topic: string;
+  headline: string;
+  tldr: string;
+  keyPoints: Array<{ point: string; importance: "high" | "medium" | "low" }>;
+  actionItems: Array<{ action: string; urgency: "high" | "medium" | "low" | "none" }>;
+  sentiment: "positive" | "neutral" | "negative" | "mixed";
 }

@@ -9,7 +9,7 @@ interface ServiceCheck {
 
 interface HealthReport {
   services: ServiceCheck[];
-  token: { valid: boolean; remaining: string };
+  token: { valid: boolean; remaining: string; reason?: string };
   allHealthy: boolean;
 }
 
@@ -37,6 +37,46 @@ async function checkService(name: string, baseUrl: string, path: string): Promis
   }
 }
 
+async function validateSessionToken(config: DevServerConfig): Promise<{ valid: boolean; reason?: string }> {
+  const params = new URLSearchParams({
+    grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
+    subject_token: config.sessionToken,
+    subject_token_type: "urn:ietf:params:oauth:token-type:jwt",
+    audience: "data-api",
+  });
+
+  try {
+    const response = await fetch(`${getServiceUrl(config, "authzPort")}/oauth/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: params.toString(),
+    });
+
+    if (response.ok) {
+      return { valid: true };
+    }
+
+    const bodyText = await response.text();
+    try {
+      const parsed = JSON.parse(bodyText);
+      return {
+        valid: false,
+        reason: String(parsed.detail || parsed.error || bodyText || `status_${response.status}`),
+      };
+    } catch {
+      return {
+        valid: false,
+        reason: bodyText || `status_${response.status}`,
+      };
+    }
+  } catch (error) {
+    return {
+      valid: false,
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
 export async function runHealthChecks(config: DevServerConfig): Promise<HealthReport> {
   const checks: Array<{ name: string; service: Parameters<typeof getServiceUrl>[1]; healthPath: string }> = [
     { name: "AuthZ", service: "authzPort", healthPath: "/health/ready" },
@@ -54,11 +94,14 @@ export async function runHealthChecks(config: DevServerConfig): Promise<HealthRe
 
   const expired = isTokenExpired(config.sessionToken);
   const remaining = tokenTimeRemaining(config.sessionToken);
+  const tokenValidation = expired
+    ? { valid: false, reason: "expired" }
+    : await validateSessionToken(config);
 
   return {
     services,
-    token: { valid: !expired, remaining },
-    allHealthy: services.every((s) => s.ok) && !expired,
+    token: { valid: tokenValidation.valid, remaining, reason: tokenValidation.reason },
+    allHealthy: services.every((s) => s.ok) && tokenValidation.valid,
   };
 }
 
@@ -73,11 +116,19 @@ export function formatHealthReport(report: HealthReport): string {
 
   const tokenIcon = report.token.valid ? "\x1b[32m✓\x1b[0m" : "\x1b[31m✗\x1b[0m";
   lines.push("");
-  lines.push(`  ${tokenIcon} Session: ${report.token.valid ? "valid" : "EXPIRED"} (${report.token.remaining})`);
+  const tokenStatus = report.token.valid
+    ? "valid"
+    : report.token.reason === "expired"
+      ? "EXPIRED"
+      : "INVALID";
+  const reasonSuffix = report.token.reason && report.token.reason !== "expired"
+    ? ` — ${report.token.reason}`
+    : "";
+  lines.push(`  ${tokenIcon} Session: ${tokenStatus} (${report.token.remaining})${reasonSuffix}`);
 
   if (!report.token.valid) {
     lines.push("");
-    lines.push("  \x1b[33mSession token expired. Get a new one:\x1b[0m");
+    lines.push("  \x1b[33mSession token is not usable. Get a new one:\x1b[0m");
     lines.push("    1. Log into your BusiBox Portal in a browser");
     lines.push("    2. Open DevTools > Application > Cookies");
     lines.push('    3. Copy the "busibox-session" cookie value');

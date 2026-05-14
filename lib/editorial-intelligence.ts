@@ -1,5 +1,7 @@
 import { getSummaryFormatOption } from "./summarization";
-import type { NewsletterEmail, NewsletterSummary } from "./types";
+import type { NewsletterClientProfile as ClientProfile, NewsletterEmail, NewsletterSummary } from "./types";
+
+export type { ClientProfile };
 
 export interface LibraryArticle {
   id: string;
@@ -9,6 +11,8 @@ export interface LibraryArticle {
   category: string;
   summary: string;
   why: string;
+  body: string;
+  summaryRecord?: NewsletterSummary;
   importance: number;
   novelty: number;
   urgency: number;
@@ -17,14 +21,6 @@ export interface LibraryArticle {
   savedFormat?: string;
   receivedAt: string;
   url?: string;
-}
-
-export interface ClientProfile {
-  id: string;
-  name: string;
-  sector: string;
-  topics: string[];
-  priorities: string;
 }
 
 const KNOWN_COMPANIES = [
@@ -54,6 +50,42 @@ const CATEGORY_KEYWORDS: Array<{ category: string; keywords: string[] }> = [
   { category: "Research", keywords: ["research", "paper", "benchmark", "reasoning", "model card"] },
 ];
 
+const CATEGORY_LABELS = new Set(CATEGORY_KEYWORDS.map((group) => group.category.toLowerCase()));
+const TOPIC_STOPWORDS = new Set([
+  "the",
+  "and",
+  "you",
+  "your",
+  "with",
+  "that",
+  "this",
+  "from",
+  "into",
+  "about",
+  "have",
+  "will",
+  "they",
+  "their",
+  "them",
+  "what",
+  "when",
+  "where",
+  "which",
+  "for",
+  "get",
+  "com",
+  "www",
+  "http",
+  "https",
+  "email",
+  "emails",
+  "newsletter",
+  "newsletters",
+  "update",
+  "updates",
+  "microsoft",
+]);
+
 export const DEFAULT_CLIENTS: ClientProfile[] = [];
 
 export function deriveLibraryArticles(newsletters: NewsletterEmail[], summaries: NewsletterSummary[]): LibraryArticle[] {
@@ -82,6 +114,8 @@ export function deriveLibraryArticles(newsletters: NewsletterEmail[], summaries:
       category,
       summary: summary?.tldr || trimText(newsletter.bodyPlainText, 180),
       why: keyPoints[0] || summary?.tldr || trimText(newsletter.bodyPlainText, 140),
+      body: newsletter.bodyPlainText,
+      summaryRecord: summary,
       importance,
       novelty,
       urgency,
@@ -177,7 +211,12 @@ function parseStringArray(value?: string): string[] {
   if (!value) return [];
   try {
     const parsed = JSON.parse(value);
-    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((item): item is string => typeof item === "string")
+      .map((item) => sanitizeTopicLabel(item))
+      .filter((item): item is string => Boolean(item))
+      .slice(0, 6);
   } catch {
     return [];
   }
@@ -201,14 +240,15 @@ function parseKeyPoints(value?: string): string[] {
   }
 }
 
-function deriveCategory(subject: string, summary?: string, topics: string[] = []): string {
+export function deriveCategory(subject: string, summary?: string, topics: string[] = []): string {
   const blob = [subject, summary || "", topics.join(" ")].join(" ").toLowerCase();
   for (const group of CATEGORY_KEYWORDS) {
     if (group.keywords.some((keyword) => blob.includes(keyword))) {
       return group.category;
     }
   }
-  return topics[0] ? titleCase(topics[0]) : "Enterprise";
+  const topicFallback = topics.find((topic) => isUsableTopicForCategory(topic));
+  return topicFallback ? titleCase(topicFallback) : "Enterprise";
 }
 
 function fallbackTopics(text: string, category: string): string[] {
@@ -220,7 +260,7 @@ function fallbackTopics(text: string, category: string): string[] {
     }
   });
   if (!topics.size) topics.add(category.toLowerCase());
-  return [...topics].slice(0, 4);
+  return [...topics].map((topic) => sanitizeTopicLabel(topic)).filter((topic): topic is string => Boolean(topic)).slice(0, 4);
 }
 
 function extractCompanies(text: string): string[] {
@@ -269,4 +309,37 @@ function normalizeToken(value: string): string {
 function fuzzyHas(terms: Set<string>, query: string): boolean {
   const queryTokens = tokenize(query);
   return queryTokens.some((token) => terms.has(token));
+}
+
+function sanitizeTopicLabel(value: string): string | null {
+  const clean = value.replace(/\s+/g, " ").trim();
+  if (!clean) return null;
+  if (/^\d+$/.test(clean)) return null;
+
+  const tokens = clean
+    .split(/[^a-zA-Z0-9]+/)
+    .map((token) => token.trim())
+    .filter(Boolean);
+
+  if (tokens.length === 0) return null;
+  if (tokens.every((token) => token.length < 3)) return null;
+
+  const meaningfulTokens = tokens.filter((token) => {
+    const normalized = token.toLowerCase();
+    return token.length >= 3 && !TOPIC_STOPWORDS.has(normalized);
+  });
+
+  if (meaningfulTokens.length === 0) return null;
+
+  const normalizedPhrase = meaningfulTokens.join(" ").toLowerCase();
+  if (CATEGORY_LABELS.has(normalizedPhrase)) {
+    return titleCase(normalizedPhrase);
+  }
+
+  return titleCase(meaningfulTokens.join(" "));
+}
+
+function isUsableTopicForCategory(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  return Boolean(normalized) && !TOPIC_STOPWORDS.has(normalized) && !CATEGORY_LABELS.has(normalized);
 }

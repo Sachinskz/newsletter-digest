@@ -42,9 +42,11 @@ This file tracks the backend work still missing behind the UI-only `Ingest Newsl
 
 ## Client relevance
 
-- Add a real client profile document plus CRUD API for sectors, priorities, topics, and account metadata.
+- Client profile document plus CRUD API now exists for sectors, priorities, topics, and account metadata.
+- Article-to-client match persistence now exists via `newsletter-digest-client-matches`.
+- `GET /api/client-relevance` now refreshes and returns stored client relevance records for the UI.
 - Decide whether client data is app-native or synced from CRM systems like HubSpot or Salesforce.
-- Build a backend matching service or persisted scoring model so article-to-client matches are not local preview logic.
+- Move client match refresh off the read path so it is not recomputed on every `GET /api/client-relevance` request.
 - Decide how approval, send queues, and client-safe review should work before outreach content is actually delivered.
 
 ## Content generator
