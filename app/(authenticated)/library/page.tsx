@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
 import { Bookmark, ChevronRight, Linkedin, ListChecks, Mail, Search, Sparkles, X } from "lucide-react";
 import {
   categoryTone,
@@ -10,15 +9,16 @@ import {
   formatReceivedAt,
   type LibraryArticle,
 } from "@/lib/editorial-intelligence";
-import type { NewsletterClientMatch, NewsletterEmail, NewsletterSummary } from "@/lib/types";
+import type { NewsletterClientMatch, NewsletterEmail, NewsletterPreferences, NewsletterSummary } from "@/lib/types";
 
 type SortKey = "importance" | "novelty" | "urgency";
 
 export default function LibraryPage() {
-  const searchParams = useSearchParams();
+  const [requestedArticleId, setRequestedArticleId] = useState<string | null>(null);
   const [articles, setArticles] = useState<LibraryArticle[]>([]);
   const [matchesByArticleId, setMatchesByArticleId] = useState<Record<string, NewsletterClientMatch[]>>({});
   const [loading, setLoading] = useState(true);
+  const [preferences, setPreferences] = useState<NewsletterPreferences | null>(null);
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("All");
   const [sort, setSort] = useState<SortKey>("importance");
@@ -26,29 +26,42 @@ export default function LibraryPage() {
   const [savedIds, setSavedIds] = useState<string[]>([]);
   const [selectedArticle, setSelectedArticle] = useState<LibraryArticle | null>(null);
   const [toast, setToast] = useState<string | null>(null);
-  const requestedArticleId = searchParams.get("article");
+
+  useEffect(() => {
+    function syncRequestedArticle() {
+      setRequestedArticleId(new URLSearchParams(window.location.search).get("article"));
+    }
+
+    syncRequestedArticle();
+    window.addEventListener("popstate", syncRequestedArticle);
+    return () => window.removeEventListener("popstate", syncRequestedArticle);
+  }, []);
 
   useEffect(() => {
     let alive = true;
 
     async function loadArticles() {
       try {
-        const [newslettersRes, summariesRes, relevanceRes] = await Promise.all([
+        const [newslettersRes, summariesRes, relevanceRes, preferencesRes] = await Promise.all([
           fetch("/api/newsletters"),
           fetch("/api/summaries"),
           fetch("/api/client-relevance"),
+          fetch("/api/preferences"),
         ]);
         const newslettersData = await newslettersRes.json();
         const summariesData = await summariesRes.json();
         const relevanceData = await relevanceRes.json().catch(() => ({}));
+        const preferencesData = await preferencesRes.json().catch(() => ({}));
 
         if (!alive) return;
 
         const derived = deriveLibraryArticles(
           (newslettersData.newsletters || []) as NewsletterEmail[],
           (summariesData.summaries || []) as NewsletterSummary[],
+          (preferencesData.preferences || null) as NewsletterPreferences | null,
         );
         setArticles(derived);
+        setPreferences((preferencesData.preferences || null) as NewsletterPreferences | null);
         const groupedMatches = ((relevanceData.matches || []) as NewsletterClientMatch[]).reduce<Record<string, NewsletterClientMatch[]>>(
           (accumulator, match) => {
             if (!accumulator[match.articleId]) accumulator[match.articleId] = [];
@@ -63,6 +76,7 @@ export default function LibraryPage() {
         if (!alive) return;
         setArticles([]);
         setMatchesByArticleId({});
+        setPreferences(null);
       } finally {
         if (alive) setLoading(false);
       }
@@ -148,6 +162,9 @@ export default function LibraryPage() {
             <Bookmark size={13} />
             Saved
           </button>
+          {preferences?.roleTitle || preferences?.primaryFocus ? (
+            <div className="analyst-chip analyst-chip-accent">{preferences.roleTitle || preferences.primaryFocus}</div>
+          ) : null}
         </div>
 
         {loading ? (

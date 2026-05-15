@@ -14,11 +14,15 @@
   "requiredEnvVars": [
     "MS_CLIENT_ID",
     "MS_CLIENT_SECRET",
-    "MS_REDIRECT_URI"
+    "MS_REDIRECT_URI",
+    "LINKEDIN_CLIENT_ID",
+    "LINKEDIN_CLIENT_SECRET",
+    "LINKEDIN_REDIRECT_URI"
   ],
   "optionalEnvVars": [
     "NEWSLETTER_SUMMARY_AGENT_NAME",
-    "NEWSLETTER_SUMMARY_AGENT_TIER"
+    "NEWSLETTER_SUMMARY_AGENT_TIER",
+    "LINKEDIN_API_VERSION"
   ],
   "busiboxAppVersion": "^3.0.0"
 }

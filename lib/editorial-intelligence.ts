@@ -1,5 +1,5 @@
 import { getSummaryFormatOption } from "./summarization";
-import type { NewsletterClientProfile as ClientProfile, NewsletterEmail, NewsletterSummary } from "./types";
+import type { RankingPriority, NewsletterClientProfile as ClientProfile, NewsletterEmail, NewsletterPreferences, NewsletterSummary } from "./types";
 
 export type { ClientProfile };
 
@@ -16,6 +16,7 @@ export interface LibraryArticle {
   importance: number;
   novelty: number;
   urgency: number;
+  personalFit: number;
   companies: string[];
   topics: string[];
   savedFormat?: string;
@@ -84,11 +85,191 @@ const TOPIC_STOPWORDS = new Set([
   "update",
   "updates",
   "microsoft",
+  "today",
+  "week",
+  "thing",
+  "things",
+  "better",
+  "right",
+  "main",
+  "focus",
+  "understand",
+  "important",
+  "importance",
+  "news",
+  "signal",
+  "signals",
+  "teams",
+  "using",
+  "build",
+  "built",
+  "business",
+  "market",
+  "markets",
+  "company",
+  "companies",
+  "product",
+  "products",
+  "client",
+  "clients",
+  "lead",
+  "manager",
+  "operator",
 ]);
+
+type PreferenceSignal = {
+  categories?: string[];
+  strongTerms?: string[];
+  detailTerms?: string[];
+  requiresCompanies?: boolean;
+};
+
+type ArticleSignalSnapshot = {
+  categories: Set<string>;
+  strongTerms: Set<string>;
+  detailTerms: Set<string>;
+  companies: Set<string>;
+};
+
+const ROLE_SIGNAL_MAP: Record<string, PreferenceSignal> = {
+  "Founder / CEO": {
+    categories: ["Enterprise", "Research"],
+    strongTerms: ["buyer", "budget", "adoption", "competitive", "revenue", "go to market"],
+    detailTerms: ["enterprise rollout", "market share", "customer demand"],
+  },
+  "Sales / Account Executive": {
+    categories: ["Enterprise", "Agents"],
+    strongTerms: ["buyer", "procurement", "pilot", "roi", "use case", "customer"],
+    detailTerms: ["enterprise adoption", "sales cycle", "client workflow"],
+  },
+  "Marketing / Content Lead": {
+    categories: ["Enterprise", "Research"],
+    strongTerms: ["audience", "positioning", "launch", "story", "distribution"],
+    detailTerms: ["market narrative", "category framing"],
+  },
+  "AI Operations Lead": {
+    categories: ["Agents", "Infrastructure", "Regulation"],
+    strongTerms: ["workflow", "deployment", "governance", "security", "reliability", "automation"],
+    detailTerms: ["operational rollout", "model deployment", "internal ops"],
+  },
+  "Product / Strategy Lead": {
+    categories: ["Research", "Enterprise", "Agents"],
+    strongTerms: ["roadmap", "platform", "benchmark", "adoption", "moat", "product strategy"],
+    detailTerms: ["category trend", "competitive landscape"],
+  },
+};
+
+const FOCUS_SIGNAL_MAP: Record<string, PreferenceSignal> = {
+  "Winning more clients": {
+    categories: ["Enterprise"],
+    strongTerms: ["buyer", "budget", "procurement", "customer", "roi", "use case"],
+    detailTerms: ["sales cycle", "enterprise buying"],
+  },
+  "Improving delivery for existing clients": {
+    categories: ["Agents", "Enterprise"],
+    strongTerms: ["workflow", "operations", "deployment", "automation", "implementation"],
+    detailTerms: ["client delivery", "service workflow"],
+  },
+  "Finding product and market opportunities": {
+    categories: ["Research", "Enterprise"],
+    strongTerms: ["benchmark", "launch", "adoption", "category", "pricing"],
+    detailTerms: ["market opportunity", "product strategy"],
+  },
+  "Operationalizing AI internally": {
+    categories: ["Agents", "Infrastructure", "Regulation"],
+    strongTerms: ["deployment", "governance", "security", "integration", "infrastructure"],
+    detailTerms: ["internal rollout", "stack choice"],
+  },
+  "Tracking risk, governance, and compliance": {
+    categories: ["Regulation"],
+    strongTerms: ["compliance", "policy", "law", "governance", "risk"],
+    detailTerms: ["regulatory change", "governance posture"],
+  },
+};
+
+const INTEREST_SIGNAL_MAP: Record<string, PreferenceSignal> = {
+  "AI agents and automation": {
+    categories: ["Agents"],
+    strongTerms: ["agent", "workflow", "automation", "copilot", "orchestration"],
+  },
+  "Enterprise buying signals": {
+    categories: ["Enterprise"],
+    strongTerms: ["buyer", "budget", "procurement", "pilot", "roi", "expansion"],
+  },
+  "Industry-specific client use cases": {
+    categories: ["Enterprise", "Agents"],
+    strongTerms: ["use case", "customer", "vertical", "deployment", "workflow"],
+  },
+  "Regulation and compliance": {
+    categories: ["Regulation"],
+    strongTerms: ["compliance", "policy", "regulation", "law", "act"],
+  },
+  "Tools we can adopt quickly": {
+    categories: ["Agents", "Infrastructure"],
+    strongTerms: ["tool", "integration", "api", "sdk", "rollout", "deployment"],
+  },
+};
+
+const WANTS_TO_KNOW_SIGNAL_MAP: Record<string, PreferenceSignal> = {
+  "What should I talk to clients about this week?": {
+    categories: ["Enterprise", "Agents"],
+    strongTerms: ["customer", "buyer", "use case", "adoption", "pilot"],
+    detailTerms: ["client conversation", "outreach angle"],
+  },
+  "Which trends are becoming revenue opportunities?": {
+    categories: ["Enterprise", "Research"],
+    strongTerms: ["buyer", "adoption", "pricing", "expansion", "market share"],
+    detailTerms: ["revenue opportunity", "commercial signal"],
+  },
+  "What will matter operationally in the next 30 days?": {
+    categories: ["Agents", "Infrastructure", "Regulation"],
+    strongTerms: ["deployment", "rollout", "governance", "policy", "integration"],
+    detailTerms: ["next 30 days", "operational readiness"],
+  },
+  "Which competitive moves should we react to early?": {
+    categories: ["Research", "Enterprise"],
+    strongTerms: ["launch", "benchmark", "acquisition", "partnership", "competitive"],
+    detailTerms: ["market move", "category shift"],
+    requiresCompanies: true,
+  },
+  "What can we deploy quickly with the least friction?": {
+    categories: ["Agents", "Infrastructure"],
+    strongTerms: ["tool", "integration", "api", "sdk", "workflow", "copilot"],
+    detailTerms: ["fast rollout", "low friction"],
+  },
+};
+
+const PRIORITY_SIGNAL_MAP: Record<RankingPriority, PreferenceSignal> = {
+  "Revenue opportunities": {
+    categories: ["Enterprise"],
+    strongTerms: ["buyer", "budget", "roi", "expansion", "pricing"],
+  },
+  "Client relevance": {
+    categories: ["Enterprise", "Agents"],
+    strongTerms: ["customer", "use case", "workflow", "pilot", "deployment"],
+  },
+  "Competitive moves": {
+    categories: ["Research", "Enterprise"],
+    strongTerms: ["launch", "benchmark", "moat", "competitive", "partnership"],
+    requiresCompanies: true,
+  },
+  "Risk and regulation": {
+    categories: ["Regulation"],
+    strongTerms: ["policy", "law", "compliance", "governance", "risk"],
+  },
+  "Tools we can deploy quickly": {
+    categories: ["Agents", "Infrastructure"],
+    strongTerms: ["tool", "integration", "api", "sdk", "automation"],
+  },
+};
 
 export const DEFAULT_CLIENTS: ClientProfile[] = [];
 
-export function deriveLibraryArticles(newsletters: NewsletterEmail[], summaries: NewsletterSummary[]): LibraryArticle[] {
+export function deriveLibraryArticles(
+  newsletters: NewsletterEmail[],
+  summaries: NewsletterSummary[],
+  preferences?: NewsletterPreferences | null,
+): LibraryArticle[] {
   if (!newsletters.length) {
     return [];
   }
@@ -102,9 +283,21 @@ export function deriveLibraryArticles(newsletters: NewsletterEmail[], summaries:
     const category = deriveCategory(newsletter.subject, summary?.tldr, summaryTopics);
     const companies = extractCompanies([newsletter.subject, newsletter.bodyPlainText, summary?.tldr || ""].join(" "));
     const ageHours = Math.max(1, Math.round((Date.now() - new Date(newsletter.receivedAt).getTime()) / (1000 * 60 * 60)));
-    const importance = clamp(94 - index * 5 - ageHours, 48, 96);
-    const novelty = clamp(64 + summaryTopics.length * 6 + (summary ? 6 : 0) - index * 2, 44, 94);
-    const urgency = clamp(88 - ageHours * 3 + (category === "Regulation" ? 8 : 0), 38, 95);
+    const personalFit = scoreAudienceFit(
+      {
+        title: summary?.title || newsletter.subject,
+        source: newsletter.senderName || newsletter.senderEmail,
+        category,
+        summary: summary?.tldr || trimText(newsletter.bodyPlainText, 180),
+        why: keyPoints[0] || summary?.tldr || trimText(newsletter.bodyPlainText, 140),
+        companies,
+        topics: summaryTopics.length ? summaryTopics : fallbackTopics(newsletter.bodyPlainText, category),
+      },
+      preferences,
+    );
+    const importance = clamp(94 - index * 5 - ageHours + Math.round(personalFit / 4), 48, 98);
+    const novelty = clamp(64 + summaryTopics.length * 6 + (summary ? 6 : 0) - index * 2 + Math.round(personalFit / 7), 44, 95);
+    const urgency = clamp(88 - ageHours * 3 + (category === "Regulation" ? 8 : 0) + priorityBoost(category, preferences), 38, 96);
 
     return {
       id: newsletter.id,
@@ -119,12 +312,111 @@ export function deriveLibraryArticles(newsletters: NewsletterEmail[], summaries:
       importance,
       novelty,
       urgency,
+      personalFit,
       companies,
       topics: summaryTopics.length ? summaryTopics : fallbackTopics(newsletter.bodyPlainText, category),
       savedFormat: summary?.format ? getSummaryFormatOption(summary.format).title : undefined,
       receivedAt: newsletter.receivedAt,
     };
   });
+}
+
+function scoreAudienceFit(
+  article: Pick<LibraryArticle, "title" | "source" | "category" | "summary" | "why" | "companies" | "topics">,
+  preferences?: NewsletterPreferences | null,
+): number {
+  if (!preferences) return 0;
+
+  const articleSignals = createArticleSignalSnapshot(article);
+  const signals = collectPreferenceSignals(preferences);
+
+  let score = 0;
+  signals.forEach((signal, index) => {
+    const weight = index === signals.length - 1 ? 1.2 : 1;
+    score += scoreSignalMatch(articleSignals, signal, weight);
+  });
+
+  if (preferences.rankingPriorities.includes("Competitive moves") && article.companies.length > 0) score += 10;
+  if (preferences.rankingPriorities.includes("Risk and regulation") && article.category === "Regulation") score += 12;
+  if (preferences.rankingPriorities.includes("Tools we can deploy quickly") && (article.category === "Agents" || article.category === "Infrastructure")) score += 8;
+
+  return clamp(Math.round(score), 0, 100);
+}
+
+function priorityBoost(category: string, preferences?: NewsletterPreferences | null): number {
+  if (!preferences) return 0;
+  if (preferences.rankingPriorities.includes("Risk and regulation") && category === "Regulation") return 8;
+  if (preferences.rankingPriorities.includes("Competitive moves") && category === "Research") return 5;
+  if (preferences.rankingPriorities.includes("Revenue opportunities") && category === "Enterprise") return 6;
+  if (preferences.rankingPriorities.includes("Tools we can deploy quickly") && category === "Agents") return 6;
+  return 0;
+}
+
+function collectPreferenceSignals(preferences: NewsletterPreferences): PreferenceSignal[] {
+  const signals: PreferenceSignal[] = [];
+
+  if (preferences.roleTitle) {
+    signals.push(ROLE_SIGNAL_MAP[preferences.roleTitle] || genericSignal(preferences.roleTitle));
+  }
+  if (preferences.primaryFocus) {
+    signals.push(FOCUS_SIGNAL_MAP[preferences.primaryFocus] || genericSignal(preferences.primaryFocus));
+  }
+  preferences.interests.forEach((interest) => {
+    signals.push(INTEREST_SIGNAL_MAP[interest] || genericSignal(interest));
+  });
+  if (preferences.wantsToKnow) {
+    signals.push(WANTS_TO_KNOW_SIGNAL_MAP[preferences.wantsToKnow] || genericSignal(preferences.wantsToKnow));
+  }
+  preferences.rankingPriorities.forEach((priority) => {
+    signals.push(PRIORITY_SIGNAL_MAP[priority]);
+  });
+
+  return signals;
+}
+
+function createArticleSignalSnapshot(
+  article: Pick<LibraryArticle, "title" | "source" | "category" | "summary" | "why" | "companies" | "topics">,
+): ArticleSignalSnapshot {
+  const categories = new Set<string>([article.category]);
+  const strongTerms = normalizeTerms([
+    article.category,
+    article.title,
+    ...article.topics,
+    ...article.companies,
+  ]);
+  const detailTerms = normalizeTerms([
+    article.summary,
+    article.why,
+    article.title,
+    ...article.topics,
+  ]);
+  const companies = new Set(article.companies.map((company) => normalizeToken(company)));
+
+  return {
+    categories,
+    strongTerms,
+    detailTerms,
+    companies,
+  };
+}
+
+function scoreSignalMatch(article: ArticleSignalSnapshot, signal: PreferenceSignal, weight = 1): number {
+  let score = 0;
+
+  const categoryMatches = (signal.categories || []).filter((category) => article.categories.has(category));
+  score += categoryMatches.length * 18 * weight;
+
+  const strongMatches = countPhraseMatches(article.strongTerms, signal.strongTerms || []);
+  score += Math.min(strongMatches, 3) * 9 * weight;
+
+  const detailMatches = countPhraseMatches(article.detailTerms, signal.detailTerms || []);
+  score += Math.min(detailMatches, 2) * 6 * weight;
+
+  if (signal.requiresCompanies && article.companies.size > 0) {
+    score += 8 * weight;
+  }
+
+  return score;
 }
 
 export function matchScore(article: LibraryArticle, client: ClientProfile): number {
@@ -299,7 +591,7 @@ function tokenize(value: string): string[] {
     .toLowerCase()
     .split(/[^a-z0-9]+/)
     .map((token) => token.trim())
-    .filter((token) => token.length > 2);
+    .filter((token) => token.length > 2 && !TOPIC_STOPWORDS.has(token));
 }
 
 function normalizeToken(value: string): string {
@@ -309,6 +601,16 @@ function normalizeToken(value: string): string {
 function fuzzyHas(terms: Set<string>, query: string): boolean {
   const queryTokens = tokenize(query);
   return queryTokens.some((token) => terms.has(token));
+}
+
+function countPhraseMatches(terms: Set<string>, phrases: string[]): number {
+  return phrases.reduce((count, phrase) => (fuzzyHas(terms, phrase) ? count + 1 : count), 0);
+}
+
+function genericSignal(value: string): PreferenceSignal {
+  return {
+    strongTerms: tokenize(value),
+  };
 }
 
 function sanitizeTopicLabel(value: string): string | null {

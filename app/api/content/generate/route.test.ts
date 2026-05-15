@@ -61,8 +61,9 @@ describe("content generate route", () => {
       body: "A useful LinkedIn post.",
       notes: "Review for specificity.",
     };
-    // The new pipeline calls /llm/completions which returns {content: "json string"}
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    // The new pipeline calls /llm/completions which returns {content: "json string"}.
+    // Use mockImplementation so each fetch call gets a fresh (unconsumed) Response.
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
       new Response(JSON.stringify({ model: "fast", content: JSON.stringify(output), usage: {}, finish_reason: "stop" }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
@@ -83,8 +84,9 @@ describe("content generate route", () => {
     );
 
     expect(response.status).toBe(200);
-    const agentBody = JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string);
-    expect(agentBody.messages[1].content).toContain("Output type: LinkedIn post");
+    // First call is the agent (runs/invoke); second call is LLM completions fallback.
+    const llmBody = JSON.parse(fetchMock.mock.calls[1]?.[1]?.body as string);
+    expect(llmBody.messages[1].content).toContain("LinkedIn post");
     expect(mocks.createGeneratedContent).toHaveBeenCalledWith("data-token", "generated-doc", expect.objectContaining({
       articleId: "article-1",
       kind: "linkedin",

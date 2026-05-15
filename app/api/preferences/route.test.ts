@@ -31,6 +31,7 @@ describe("preferences route", () => {
 
     expect(response.status).toBe(200);
     expect(body.hasPreferences).toBe(false);
+    expect(body.hasProfile).toBe(false);
     expect(body.summaryFormat).toBe("bullet_points");
   });
 
@@ -56,6 +57,8 @@ describe("preferences route", () => {
     mocks.upsertPreferences.mockResolvedValue({
       id: "summary-format",
       summaryFormat: "executive_summary",
+      interests: [],
+      rankingPriorities: [],
       createdAt: "now",
       updatedAt: "now",
     });
@@ -70,7 +73,57 @@ describe("preferences route", () => {
 
     expect(response.status).toBe(200);
     expect(body.hasPreferences).toBe(true);
+    expect(body.hasProfile).toBe(false);
     expect(body.summaryFormat).toBe("executive_summary");
-    expect(mocks.upsertPreferences).toHaveBeenCalledWith("token", "preferences-doc", "executive_summary");
+    expect(mocks.upsertPreferences).toHaveBeenCalledWith("token", "preferences-doc", {
+      summaryFormat: "executive_summary",
+      roleTitle: undefined,
+      primaryFocus: undefined,
+      interests: undefined,
+      wantsToKnow: undefined,
+      rankingPriorities: undefined,
+    });
+  });
+
+  it("saves a full briefing profile", async () => {
+    mocks.requireAuthWithTokenExchange.mockResolvedValue({ apiToken: "token" });
+    mocks.ensureDataDocuments.mockResolvedValue({ preferences: "preferences-doc" });
+    mocks.upsertPreferences.mockResolvedValue({
+      id: "summary-format",
+      summaryFormat: "bullet_points",
+      roleTitle: "Founder",
+      primaryFocus: "Client growth",
+      interests: ["agents", "governance"],
+      wantsToKnow: "Which trends affect our enterprise pipeline?",
+      rankingPriorities: ["Client relevance", "Revenue opportunities"],
+      createdAt: "now",
+      updatedAt: "now",
+    });
+
+    const response = await PUT(
+      new NextRequest("http://localhost:3002/api/preferences", {
+        method: "PUT",
+        body: JSON.stringify({
+          summaryFormat: "bullet_points",
+          roleTitle: " Founder ",
+          primaryFocus: "Client growth",
+          interests: ["agents", " governance "],
+          wantsToKnow: "Which trends affect our enterprise pipeline?",
+          rankingPriorities: ["Client relevance", "Revenue opportunities"],
+        }),
+      }),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.hasProfile).toBe(true);
+    expect(mocks.upsertPreferences).toHaveBeenCalledWith("token", "preferences-doc", {
+      summaryFormat: "bullet_points",
+      roleTitle: "Founder",
+      primaryFocus: "Client growth",
+      interests: ["agents", "governance"],
+      wantsToKnow: "Which trends affect our enterprise pipeline?",
+      rankingPriorities: ["Client relevance", "Revenue opportunities"],
+    });
   });
 });

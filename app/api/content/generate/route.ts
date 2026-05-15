@@ -12,14 +12,19 @@ export async function POST(request: NextRequest) {
   if (dataAuth instanceof NextResponse) return dataAuth;
 
   const body = await request.json().catch(() => null);
-  const article = body?.article;
+  // Accept either a single `article` (legacy) or an `articles` array (1-3)
+  const rawArticles: unknown = body?.articles ?? (body?.article ? [body.article] : undefined);
   const client = body?.client || null;
   const kind = body?.kind;
   const tone = body?.tone || "Analytical";
 
-  if (!isLibraryArticle(article)) {
+  if (!Array.isArray(rawArticles) || rawArticles.length === 0 || rawArticles.length > 3) {
+    return NextResponse.json({ error: "Provide 1–3 articles" }, { status: 400 });
+  }
+  if (!rawArticles.every(isLibraryArticle)) {
     return NextResponse.json({ error: "Invalid article payload" }, { status: 400 });
   }
+  const articles: LibraryArticle[] = rawArticles;
   if (!isContentKind(kind)) {
     return NextResponse.json({ error: "Invalid content type" }, { status: 400 });
   }
@@ -30,14 +35,19 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Client email generation requires a client" }, { status: 400 });
   }
 
+  const primaryArticle = articles[0];
+  const combinedTitle =
+    articles.length > 1 ? articles.map((a: LibraryArticle) => a.title).join(" + ") : primaryArticle.title;
+
   try {
-    const output = await requestContentGeneration(auth.apiToken, { article, kind, tone, client });
+    const output = await requestContentGeneration(auth.apiToken, { articles, kind, tone, client });
     const ids = await ensureDataDocuments(dataAuth.apiToken);
     const content = await createGeneratedContent(dataAuth.apiToken, ids.generatedContent, {
-      articleId: article.id,
-      articleTitle: article.title,
-      articleSource: article.source,
+      articleId: primaryArticle.id,
+      articleTitle: combinedTitle.slice(0, 200),
+      articleSource: primaryArticle.source,
       kind,
+      ...(kind === "linkedin" ? { channel: "linkedin" as const } : {}),
       tone,
       ...(client ? { clientName: client.name, clientSector: client.sector } : {}),
       output,

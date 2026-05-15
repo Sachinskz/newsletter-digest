@@ -12,11 +12,14 @@ import type {
   ConnectionStatus,
   GeneratedContent,
   GeneratedContentOutput,
+  LinkedInConnection,
+  LinkedInConnectionStatus,
   NewsletterClientMatch,
   NewsletterClientProfile,
   NewsletterConnection,
   NewsletterEmail,
   NewsletterPreferences,
+  RankingPriority,
   NewsletterSubscription,
   NewsletterSummary,
   SummaryFormat,
@@ -27,6 +30,7 @@ export const APP_ID = "newsletter-digest";
 
 export const DOCUMENTS = {
   CONNECTIONS: "newsletter-digest-connections",
+  LINKEDIN_CONNECTIONS: "newsletter-digest-linkedin-connections",
   SUBSCRIPTIONS: "newsletter-digest-subscriptions",
   EMAILS: "newsletter-digest-emails",
   SUMMARIES: "newsletter-digest-summaries",
@@ -37,6 +41,7 @@ export const DOCUMENTS = {
 } as const;
 
 export const DEFAULT_CONNECTION_ID = "microsoft-primary";
+export const DEFAULT_LINKEDIN_CONNECTION_ID = "linkedin-primary";
 export const DEFAULT_PREFERENCES_ID = "summary-format";
 
 const baseFields = {
@@ -83,6 +88,28 @@ export const subscriptionSchema: AppDataSchema = {
   displayName: "Newsletter Subscriptions",
   itemLabel: "Subscription",
   sourceApp: APP_ID,
+  visibility: "authenticated",
+  allowSharing: false,
+  graphNode: "",
+  graphRelationships: [],
+};
+
+export const linkedinConnectionSchema: AppDataSchema = {
+  fields: {
+    ...baseFields,
+    memberId: { type: "string", required: true, label: "Member ID", hidden: true },
+    memberName: { type: "string", label: "Member Name", order: 1 },
+    memberEmail: { type: "string", label: "Member Email", order: 2 },
+    tokenFileId: { type: "string", required: true, hidden: true },
+    encryptedTokens: { type: "string", required: true, hidden: true, multiline: true },
+    accessTokenExpiresAt: { type: "string", required: true, label: "Access Token Expires", order: 3 },
+    connectedAt: { type: "string", required: true, readonly: true, order: 4 },
+    lastUsedAt: { type: "string", readonly: true, order: 5 },
+    status: { type: "string", required: true, label: "Status", order: 6 },
+  },
+  displayName: "LinkedIn Connections",
+  itemLabel: "LinkedIn Connection",
+  sourceApp: APP_ID,
   visibility: "personal",
   allowSharing: false,
   graphNode: "",
@@ -106,7 +133,7 @@ export const emailSchema: AppDataSchema = {
   displayName: "Newsletter Emails",
   itemLabel: "Newsletter",
   sourceApp: APP_ID,
-  visibility: "personal",
+  visibility: "authenticated",
   allowSharing: false,
   graphNode: "",
   graphRelationships: [],
@@ -129,7 +156,7 @@ export const summarySchema: AppDataSchema = {
   displayName: "Newsletter Summaries",
   itemLabel: "Summary",
   sourceApp: APP_ID,
-  visibility: "personal",
+  visibility: "authenticated",
   allowSharing: false,
   graphNode: "",
   graphRelationships: [],
@@ -139,8 +166,13 @@ export const preferencesSchema: AppDataSchema = {
   fields: {
     ...baseFields,
     summaryFormat: { type: "string", required: true, label: "Summary Format", order: 1 },
-    createdAt: { type: "string", required: true, readonly: true, order: 2 },
-    updatedAt: { type: "string", required: true, readonly: true, order: 3 },
+    roleTitle: { type: "string", label: "Role or title", order: 2 },
+    primaryFocus: { type: "string", label: "Primary focus", order: 3 },
+    interests: { type: "string", required: true, label: "Interests JSON", hidden: true },
+    wantsToKnow: { type: "string", label: "Wants to know", multiline: true, order: 4 },
+    rankingPriorities: { type: "string", required: true, label: "Ranking Priorities JSON", hidden: true },
+    createdAt: { type: "string", required: true, readonly: true, order: 5 },
+    updatedAt: { type: "string", required: true, readonly: true, order: 6 },
   },
   displayName: "Newsletter Preferences",
   itemLabel: "Preferences",
@@ -151,6 +183,11 @@ export const preferencesSchema: AppDataSchema = {
   graphRelationships: [],
 };
 
+type StoredNewsletterPreferences = Omit<NewsletterPreferences, "interests" | "rankingPriorities"> & {
+  interests: string;
+  rankingPriorities: string;
+};
+
 export const generatedContentSchema: AppDataSchema = {
   fields: {
     ...baseFields,
@@ -159,13 +196,20 @@ export const generatedContentSchema: AppDataSchema = {
     articleSource: { type: "string", required: true, label: "Article Source", order: 3 },
     kind: { type: "string", required: true, label: "Content Type", order: 4 },
     tone: { type: "string", required: true, label: "Tone", order: 5 },
+    channel: { type: "string", label: "Channel", order: 6 },
     clientName: { type: "string", label: "Client Name", order: 6 },
     clientSector: { type: "string", label: "Client Sector", order: 7 },
     title: { type: "string", required: true, label: "Draft Title", order: 8 },
     subject: { type: "string", label: "Subject", order: 9 },
     body: { type: "string", required: true, label: "Body", multiline: true, order: 10 },
     notes: { type: "string", required: true, label: "Review Notes", multiline: true, order: 11 },
-    createdAt: { type: "string", required: true, readonly: true, order: 12 },
+    publishStatus: { type: "string", label: "Publish Status", order: 12 },
+    publishTarget: { type: "string", label: "Publish Target", order: 13 },
+    publishError: { type: "string", label: "Publish Error", multiline: true, order: 14 },
+    publishedAt: { type: "string", label: "Published At", readonly: true, order: 15 },
+    externalPostId: { type: "string", label: "External Post ID", order: 16 },
+    publishedByUserId: { type: "string", label: "Published By User ID", hidden: true },
+    createdAt: { type: "string", required: true, readonly: true, order: 17 },
   },
   displayName: "Newsletter Generated Content",
   itemLabel: "Generated Content",
@@ -232,6 +276,7 @@ export const clientMatchSchema: AppDataSchema = {
 
 export async function ensureDataDocuments(token: string): Promise<{
   connections: string;
+  linkedinConnections: string;
   subscriptions: string;
   emails: string;
   summaries: string;
@@ -244,9 +289,10 @@ export async function ensureDataDocuments(token: string): Promise<{
     token,
     {
       connections: { name: DOCUMENTS.CONNECTIONS, schema: connectionSchema, visibility: "personal" },
-      subscriptions: { name: DOCUMENTS.SUBSCRIPTIONS, schema: subscriptionSchema, visibility: "personal" },
-      emails: { name: DOCUMENTS.EMAILS, schema: emailSchema, visibility: "personal" },
-      summaries: { name: DOCUMENTS.SUMMARIES, schema: summarySchema, visibility: "personal" },
+      linkedinConnections: { name: DOCUMENTS.LINKEDIN_CONNECTIONS, schema: linkedinConnectionSchema, visibility: "personal" },
+      subscriptions: { name: DOCUMENTS.SUBSCRIPTIONS, schema: subscriptionSchema, visibility: "authenticated" },
+      emails: { name: DOCUMENTS.EMAILS, schema: emailSchema, visibility: "authenticated" },
+      summaries: { name: DOCUMENTS.SUMMARIES, schema: summarySchema, visibility: "authenticated" },
       preferences: { name: DOCUMENTS.PREFERENCES, schema: preferencesSchema, visibility: "personal" },
       generatedContent: { name: DOCUMENTS.GENERATED_CONTENT, schema: generatedContentSchema, visibility: "personal" },
       clients: { name: DOCUMENTS.CLIENTS, schema: clientProfileSchema, visibility: "personal" },
@@ -256,6 +302,7 @@ export async function ensureDataDocuments(token: string): Promise<{
   );
   return ids as {
     connections: string;
+    linkedinConnections: string;
     subscriptions: string;
     emails: string;
     summaries: string;
@@ -478,6 +525,73 @@ export async function deleteConnection(token: string, documentId: string): Promi
   await deleteRecords(token, documentId, { field: "id", op: "eq", value: DEFAULT_CONNECTION_ID });
 }
 
+export async function getLinkedInConnection(
+  token: string,
+  documentId: string,
+): Promise<LinkedInConnection | null> {
+  const result = await queryRecords<LinkedInConnection>(token, documentId, {
+    where: { field: "id", op: "eq", value: DEFAULT_LINKEDIN_CONNECTION_ID },
+    limit: 1,
+  });
+  return result.records[0] || null;
+}
+
+export async function upsertLinkedInConnection(
+  token: string,
+  documentId: string,
+  input: Omit<LinkedInConnection, "id" | "connectedAt"> & { connectedAt?: string },
+): Promise<LinkedInConnection> {
+  const existing = await getLinkedInConnection(token, documentId);
+  const connection: LinkedInConnection = {
+    id: DEFAULT_LINKEDIN_CONNECTION_ID,
+    connectedAt: input.connectedAt || existing?.connectedAt || getNow(),
+    ...input,
+  };
+
+  if (existing) {
+    await updateRecords(token, documentId, asRecord(connection), { field: "id", op: "eq", value: DEFAULT_LINKEDIN_CONNECTION_ID });
+  } else {
+    await insertRecords(token, documentId, [asRecord(connection)]);
+  }
+  return connection;
+}
+
+export async function updateLinkedInConnection(
+  token: string,
+  documentId: string,
+  updates: Partial<Omit<LinkedInConnection, "id" | "connectedAt">>,
+): Promise<LinkedInConnection | null> {
+  const existing = await getLinkedInConnection(token, documentId);
+  if (!existing) return null;
+
+  const nextConnection: LinkedInConnection = {
+    ...existing,
+    ...updates,
+  };
+  await updateRecords(token, documentId, asRecord(nextConnection), {
+    field: "id",
+    op: "eq",
+    value: DEFAULT_LINKEDIN_CONNECTION_ID,
+  });
+  return nextConnection;
+}
+
+export async function updateLinkedInConnectionStatus(
+  token: string,
+  documentId: string,
+  status: LinkedInConnectionStatus,
+): Promise<void> {
+  await updateRecords(token, documentId, asRecord({ status }), {
+    field: "id",
+    op: "eq",
+    value: DEFAULT_LINKEDIN_CONNECTION_ID,
+  });
+}
+
+export async function deleteLinkedInConnection(token: string, documentId: string): Promise<void> {
+  await deleteRecords(token, documentId, { field: "id", op: "eq", value: DEFAULT_LINKEDIN_CONNECTION_ID });
+}
+
 export async function listEmails(
   token: string,
   documentId: string,
@@ -605,33 +719,62 @@ export async function getPreferences(
   token: string,
   documentId: string,
 ): Promise<NewsletterPreferences | null> {
-  const result = await queryRecords<NewsletterPreferences>(token, documentId, {
+  const result = await queryRecords<StoredNewsletterPreferences>(token, documentId, {
     where: { field: "id", op: "eq", value: DEFAULT_PREFERENCES_ID },
     limit: 1,
   });
-  return result.records[0] || null;
+  const record = result.records[0];
+  return record ? inflatePreferences(record) : null;
 }
 
 export async function upsertPreferences(
   token: string,
   documentId: string,
-  summaryFormat: SummaryFormat,
+  input: {
+    summaryFormat: SummaryFormat;
+    roleTitle?: string;
+    primaryFocus?: string;
+    interests?: string[];
+    wantsToKnow?: string;
+    rankingPriorities?: RankingPriority[];
+  },
 ): Promise<NewsletterPreferences> {
   const existing = await getPreferences(token, documentId);
   const now = getNow();
   const preferences: NewsletterPreferences = {
     id: DEFAULT_PREFERENCES_ID,
-    summaryFormat,
+    summaryFormat: input.summaryFormat,
+    roleTitle: input.roleTitle ?? existing?.roleTitle,
+    primaryFocus: input.primaryFocus ?? existing?.primaryFocus,
+    interests: input.interests ?? existing?.interests ?? [],
+    wantsToKnow: input.wantsToKnow ?? existing?.wantsToKnow,
+    rankingPriorities: input.rankingPriorities ?? existing?.rankingPriorities ?? [],
     createdAt: existing?.createdAt || now,
     updatedAt: now,
   };
 
   if (existing) {
-    await updateRecords(token, documentId, asRecord(preferences), { field: "id", op: "eq", value: DEFAULT_PREFERENCES_ID });
+    await updateRecords(token, documentId, serializePreferences(preferences), { field: "id", op: "eq", value: DEFAULT_PREFERENCES_ID });
   } else {
-    await insertRecords(token, documentId, [asRecord(preferences)]);
+    await insertRecords(token, documentId, [serializePreferences(preferences)]);
   }
   return preferences;
+}
+
+function inflatePreferences(record: StoredNewsletterPreferences): NewsletterPreferences {
+  return {
+    ...record,
+    interests: parseStoredStringArray(record.interests),
+    rankingPriorities: parseStoredStringArray(record.rankingPriorities) as RankingPriority[],
+  };
+}
+
+function serializePreferences(preferences: NewsletterPreferences): Record<string, unknown> {
+  return asRecord({
+    ...preferences,
+    interests: JSON.stringify(preferences.interests || []),
+    rankingPriorities: JSON.stringify(preferences.rankingPriorities || []),
+  });
 }
 
 export async function createSummary(
@@ -698,6 +841,7 @@ export async function createGeneratedContent(
     articleSource: string;
     kind: GeneratedContent["kind"];
     tone: GeneratedContent["tone"];
+    channel?: GeneratedContent["channel"];
     clientName?: string;
     clientSector?: string;
     output: GeneratedContentOutput;
@@ -710,16 +854,51 @@ export async function createGeneratedContent(
     articleSource: input.articleSource,
     kind: input.kind,
     tone: input.tone,
+    ...(input.channel ? { channel: input.channel } : {}),
     ...(input.clientName ? { clientName: input.clientName } : {}),
     ...(input.clientSector ? { clientSector: input.clientSector } : {}),
     title: input.output.title,
     subject: input.output.subject,
     body: input.output.body,
     notes: input.output.notes,
+    ...(input.kind === "linkedin" ? { publishStatus: "draft" as const, publishTarget: "personal_profile" as const } : {}),
     createdAt: getNow(),
   };
   await insertRecords(token, documentId, [asRecord(content)]);
   return content;
+}
+
+export async function getGeneratedContentById(
+  token: string,
+  documentId: string,
+  id: string,
+): Promise<GeneratedContent | null> {
+  const result = await queryRecords<GeneratedContent>(token, documentId, {
+    where: { field: "id", op: "eq", value: id },
+    limit: 1,
+  });
+  return result.records[0] || null;
+}
+
+export async function updateGeneratedContent(
+  token: string,
+  documentId: string,
+  id: string,
+  updates: Partial<GeneratedContent>,
+): Promise<GeneratedContent | null> {
+  const existing = await getGeneratedContentById(token, documentId, id);
+  if (!existing) return null;
+
+  const nextContent: GeneratedContent = {
+    ...existing,
+    ...updates,
+  };
+  await updateRecords(token, documentId, asRecord(nextContent), {
+    field: "id",
+    op: "eq",
+    value: id,
+  });
+  return nextContent;
 }
 
 export async function listGeneratedContent(

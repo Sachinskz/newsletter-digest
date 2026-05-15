@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import type { ComponentType } from "react";
+import type { ComponentType, ReactNode } from "react";
 import {
   Bolt,
   BriefcaseBusiness,
@@ -11,16 +11,18 @@ import {
   FileText,
   Inbox,
   Linkedin,
+  LoaderCircle,
   Mail,
   MessageSquareText,
   RefreshCw,
+  Save,
   Sparkles,
   Tags,
   TrendingUp,
 } from "lucide-react";
-import { deriveCategory } from "@/lib/editorial-intelligence";
+import { deriveLibraryArticles } from "@/lib/editorial-intelligence";
 import { DEFAULT_SUMMARY_FORMAT, getSummaryFormatOption } from "@/lib/summarization";
-import type { NewsletterEmail, NewsletterPreferences, NewsletterSummary, SummaryFormat } from "@/lib/types";
+import type { NewsletterEmail, NewsletterPreferences, NewsletterSummary, RankingPriority, SummaryFormat } from "@/lib/types";
 
 interface ConnectionResponse {
   connected: boolean;
@@ -33,6 +35,7 @@ interface ConnectionResponse {
 interface PreferencesResponse {
   preferences: NewsletterPreferences | null;
   hasPreferences: boolean;
+  hasProfile?: boolean;
   summaryFormat: SummaryFormat;
 }
 
@@ -54,6 +57,8 @@ export default function DigestPage() {
   const [newsletters, setNewsletters] = useState<NewsletterEmail[]>([]);
   const [summaries, setSummaries] = useState<NewsletterSummary[]>([]);
   const [loading, setLoading] = useState(true);
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [profileMessage, setProfileMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   async function loadDashboard() {
@@ -91,28 +96,29 @@ export default function DigestPage() {
     void loadDashboard();
   }, []);
 
-  const summaryByEmailId = useMemo(() => {
-    return new Map(summaries.map((summary) => [summary.emailId, summary]));
-  }, [summaries]);
+  useEffect(() => {
+    if (!loading) return;
+    const timer = window.setTimeout(() => {
+      setLoading(false);
+    }, 8000);
+    return () => window.clearTimeout(timer);
+  }, [loading]);
 
   const articles = useMemo<DashboardArticle[]>(() => {
-    return newsletters.map((newsletter, index) => {
-      const summary = summaryByEmailId.get(newsletter.id);
-      const topics = parseJsonArray<string>(summary?.topics || "");
-      const category = summary ? deriveCategory(newsletter.subject, summary.tldr, topics) : "Inbox Queue";
-      return {
-        id: newsletter.id,
-        title: summary?.title || newsletter.subject,
-        source: newsletter.senderName || newsletter.senderEmail,
-        category,
-        why: summary?.tldr || trimText(newsletter.bodyPlainText, 180),
-        preview: trimText(newsletter.bodyPlainText, 160),
-        importance: Math.max(55, 96 - index * 5 - (summary ? 0 : 10)),
-        savedFormat: summary?.format ? getSummaryFormatOption(summary.format).title : undefined,
-        href: `/library?article=${encodeURIComponent(newsletter.id)}`,
-      };
-    });
-  }, [newsletters, summaryByEmailId]);
+    return deriveLibraryArticles(newsletters, summaries, preferences?.preferences || null)
+      .map((article) => ({
+        id: article.id,
+        title: article.title,
+        source: article.source,
+        category: article.category,
+        why: article.why,
+        preview: trimText(article.body, 160),
+        importance: article.importance,
+        savedFormat: article.savedFormat,
+        href: `/library?article=${encodeURIComponent(article.id)}`,
+      }))
+      .sort((a, b) => b.importance - a.importance);
+  }, [newsletters, preferences?.preferences, summaries]);
 
   const topThree = articles.slice(0, 3);
   const briefArticles = articles.slice(0, 5);
@@ -127,6 +133,7 @@ export default function DigestPage() {
   const summaryFormat = preferences?.summaryFormat || DEFAULT_SUMMARY_FORMAT;
   const formatOption = getSummaryFormatOption(summaryFormat);
   const pending = newsletters.filter((newsletter) => !newsletter.hasBeenSummarized);
+  const hasBriefingProfile = Boolean(preferences?.hasProfile);
 
   const heroTitle = connection?.connected
     ? briefArticles[0]?.title || "Your AI brief is ready as soon as the first newsletters sync in."
@@ -138,9 +145,46 @@ export default function DigestPage() {
 
   return (
     <div className="grid grid-cols-12 gap-6 text-[#e7e9ee]">
+      {!loading && !hasBriefingProfile ? (
+        <section className="col-span-12">
+          <BriefingProfileCard
+            summaryFormat={summaryFormat}
+            saving={savingProfile}
+            onSave={async (profile) => {
+              setSavingProfile(true);
+              setProfileMessage(null);
+              setError(null);
+              try {
+                const res = await fetch("/api/preferences", {
+                  method: "PUT",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    summaryFormat,
+                    ...profile,
+                  }),
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || "Could not save briefing profile");
+                setPreferences(data);
+                setProfileMessage("Your briefing profile is saved. The dashboard will now rank stories around your priorities.");
+              } catch (saveError) {
+                setError(saveError instanceof Error ? saveError.message : "Could not save briefing profile");
+              } finally {
+                setSavingProfile(false);
+              }
+            }}
+          />
+        </section>
+      ) : null}
+
       {error ? (
         <section className="col-span-12 rounded-xl border border-red-400/25 bg-red-400/10 px-4 py-3 text-sm text-red-100">
           {error}
+        </section>
+      ) : null}
+      {profileMessage ? (
+        <section className="col-span-12 rounded-xl border border-emerald-400/25 bg-emerald-400/10 px-4 py-3 text-sm text-emerald-100">
+          {profileMessage}
         </section>
       ) : null}
 
@@ -155,7 +199,9 @@ export default function DigestPage() {
                     <Bolt size={11} /> Today's Brief
                   </span>
                   <span className="text-[11px] text-white/40">
-                    {preferences?.hasPreferences ? `1-2 min read · formatted for ${formatOption.title}` : "Pick a format to sharpen the brief"}
+                    {hasBriefingProfile
+                      ? `Ranked for ${preferences?.preferences?.roleTitle || preferences?.preferences?.primaryFocus || "your priorities"} · formatted for ${formatOption.title}`
+                      : `1-2 min read · formatted for ${formatOption.title}`}
                   </span>
                 </div>
                 <h2 className="max-w-2xl text-[24px] font-semibold tracking-tight leading-snug bg-[linear-gradient(90deg,#c8b8ff,#8ee8ff)] bg-clip-text text-transparent">
@@ -302,6 +348,18 @@ export default function DigestPage() {
               chipLabel={preferences?.hasPreferences ? "saved" : "pending"}
             />
             <WorkflowCard
+              title="Ranking profile"
+              subtitle={hasBriefingProfile ? (preferences?.preferences?.roleTitle || preferences?.preferences?.primaryFocus || "Profile saved") : "Needs setup"}
+              body={
+                hasBriefingProfile
+                  ? "The brief is now weighted around your role, interests, and ranking priorities."
+                  : "Answer 5 quick questions so the app can rank stories around what matters most to you."
+              }
+              actionHref="/"
+              actionLabel={hasBriefingProfile ? "Review profile" : "Complete profile"}
+              chipLabel={hasBriefingProfile ? "ranked" : "needed"}
+            />
+            <WorkflowCard
               title={connection?.connected ? "Microsoft 365 connected" : "Connect Outlook"}
               subtitle={connection?.connected ? connection.accountEmail || "Connected source" : "OAuth setup pending"}
               body={connection?.connected ? "Your inbox can sync through the production Microsoft Graph flow." : "Once the portal owner finishes the redirect URI and secret setup, this dashboard can sync live newsletters."}
@@ -324,6 +382,183 @@ export default function DigestPage() {
       {loading ? (
         <section className="col-span-12 text-[12px] text-white/45">Loading dashboard...</section>
       ) : null}
+    </div>
+  );
+}
+
+const RANKING_PRIORITY_OPTIONS: RankingPriority[] = [
+  "Revenue opportunities",
+  "Client relevance",
+  "Competitive moves",
+  "Risk and regulation",
+  "Tools we can deploy quickly",
+];
+
+const ROLE_OPTIONS = [
+  "Founder / CEO",
+  "Sales / Account Executive",
+  "Marketing / Content Lead",
+  "AI Operations Lead",
+  "Product / Strategy Lead",
+] as const;
+
+const FOCUS_OPTIONS = [
+  "Winning more clients",
+  "Improving delivery for existing clients",
+  "Finding product and market opportunities",
+  "Operationalizing AI internally",
+  "Tracking risk, governance, and compliance",
+] as const;
+
+const INTEREST_OPTIONS = [
+  "AI agents and automation",
+  "Enterprise buying signals",
+  "Industry-specific client use cases",
+  "Regulation and compliance",
+  "Tools we can adopt quickly",
+] as const;
+
+const WANTS_TO_KNOW_OPTIONS = [
+  "What should I talk to clients about this week?",
+  "Which trends are becoming revenue opportunities?",
+  "What will matter operationally in the next 30 days?",
+  "Which competitive moves should we react to early?",
+  "What can we deploy quickly with the least friction?",
+] as const;
+
+function BriefingProfileCard({
+  summaryFormat,
+  saving,
+  onSave,
+}: {
+  summaryFormat: SummaryFormat;
+  saving: boolean;
+  onSave: (profile: {
+    roleTitle: string;
+    primaryFocus: string;
+    interests: string[];
+    wantsToKnow: string;
+    rankingPriorities: RankingPriority[];
+  }) => Promise<void>;
+}) {
+  const [roleTitle, setRoleTitle] = useState<(typeof ROLE_OPTIONS)[number] | "">("");
+  const [primaryFocus, setPrimaryFocus] = useState<(typeof FOCUS_OPTIONS)[number] | "">("");
+  const [interests, setInterests] = useState<(typeof INTEREST_OPTIONS)[number] | "">("");
+  const [wantsToKnow, setWantsToKnow] = useState<(typeof WANTS_TO_KNOW_OPTIONS)[number] | "">("");
+  const [rankingPriority, setRankingPriority] = useState<RankingPriority | "">("");
+
+  const isComplete = Boolean(roleTitle && primaryFocus && interests && wantsToKnow && rankingPriority);
+
+  async function handleSubmit() {
+    if (!isComplete) return;
+    await onSave({
+      roleTitle,
+      primaryFocus,
+      interests: [interests],
+      wantsToKnow,
+      rankingPriorities: [rankingPriority as RankingPriority],
+    });
+  }
+
+  return (
+    <div className="rounded-2xl border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.05),rgba(255,255,255,0.02))] backdrop-blur-[14px] p-6">
+      <div className="flex items-start justify-between gap-4 mb-5">
+        <div>
+          <div className="inline-flex items-center gap-[6px] rounded-full border border-[#2cd0ff]/30 bg-[#2cd0ff]/10 px-[10px] py-[3px] text-[11px] font-medium text-[#b1e9ff]">
+            <Tags size={11} />
+            Briefing profile
+          </div>
+          <h2 className="mt-3 text-[20px] font-semibold text-white">Answer 5 quick questions so we can rank the brief for you</h2>
+          <p className="mt-2 max-w-3xl text-[13px] leading-relaxed text-white/62">
+            This shapes what rises to the top first. Your current summary format stays set to {getSummaryFormatOption(summaryFormat).title.toLowerCase()}.
+          </p>
+        </div>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2">
+        <Question label="1. What's your role or title?">
+          <SingleChoiceOptions
+            options={ROLE_OPTIONS}
+            value={roleTitle}
+            onChange={(value) => setRoleTitle(value as (typeof ROLE_OPTIONS)[number])}
+          />
+        </Question>
+        <Question label="2. What's your primary focus right now?">
+          <SingleChoiceOptions
+            options={FOCUS_OPTIONS}
+            value={primaryFocus}
+            onChange={(value) => setPrimaryFocus(value as (typeof FOCUS_OPTIONS)[number])}
+          />
+        </Question>
+        <Question label="3. Which topics are you most interested in?">
+          <SingleChoiceOptions
+            options={INTEREST_OPTIONS}
+            value={interests}
+            onChange={(value) => setInterests(value as (typeof INTEREST_OPTIONS)[number])}
+          />
+        </Question>
+        <Question label="4. What do you want to understand better?">
+          <SingleChoiceOptions
+            options={WANTS_TO_KNOW_OPTIONS}
+            value={wantsToKnow}
+            onChange={(value) => setWantsToKnow(value as (typeof WANTS_TO_KNOW_OPTIONS)[number])}
+          />
+        </Question>
+      </div>
+
+      <Question label="5. What matters most when we rank stories?">
+        <SingleChoiceOptions
+          options={RANKING_PRIORITY_OPTIONS}
+          value={rankingPriority}
+          onChange={(value) => setRankingPriority(value as RankingPriority)}
+        />
+        <div className="mt-2 text-[11px] text-white/42">Pick the one thing that should influence ranking the most.</div>
+      </Question>
+
+      <div className="mt-5 flex items-center justify-between gap-4 border-t border-white/5 pt-5">
+        <div className="text-[12px] text-white/46">Choose one answer for each question. You can refine the profile later if your priorities change.</div>
+        <button className="inline-flex items-center gap-2 rounded-[10px] border border-[#7c5cff]/60 bg-[linear-gradient(135deg,#7c5cff,#5b3df5)] px-[14px] py-[8px] text-[13px] font-medium text-white shadow-[0_6px_24px_-8px_rgba(124,92,255,.6)] disabled:cursor-not-allowed disabled:opacity-55" type="button" onClick={handleSubmit} disabled={saving || !isComplete}>
+          {saving ? <LoaderCircle size={14} className="animate-spin" /> : <Save size={14} />}
+          {saving ? "Saving..." : isComplete ? "Save ranking profile" : "Answer all 5 questions"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function Question({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <label className="block">
+      <div className="mb-2 text-[12px] font-medium text-white/82">{label}</div>
+      {children}
+    </label>
+  );
+}
+
+function SingleChoiceOptions({
+  options,
+  value,
+  onChange,
+}: {
+  options: readonly string[];
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      {options.map((option) => {
+        const selected = value === option;
+        return (
+          <button
+            key={option}
+            type="button"
+            onClick={() => onChange(option)}
+            className={`analyst-chip cursor-pointer text-left transition ${selected ? "analyst-chip-accent" : "opacity-85 hover:opacity-100"}`}
+          >
+            {option}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -405,15 +640,6 @@ function categoryDotColor(category: string): string {
 
 function shortCategory(category: string): string {
   return category.split(" ")[0] || category;
-}
-
-function parseJsonArray<T>(value: string): T[] {
-  try {
-    const parsed = JSON.parse(value);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
 }
 
 function trimText(value: string, maxLength: number): string {

@@ -1,6 +1,6 @@
 # Newsletter Digest
 
-Newsletter Digest is a Busibox app that connects a user's Microsoft 365 mailbox, detects newsletter-style emails, generates structured AI summaries, and produces business content (LinkedIn posts, client emails, thought leadership) from the ingested articles.
+Newsletter Digest is a Busibox app that connects a user's Microsoft 365 mailbox, detects newsletter-style emails, generates structured AI summaries, and produces business content (LinkedIn posts, client emails, thought leadership) from the ingested articles. It also supports direct publishing of stored LinkedIn drafts to a connected personal LinkedIn profile.
 
 ## What This App Does
 
@@ -27,7 +27,7 @@ Newsletter Digest is a Busibox app that connects a user's Microsoft 365 mailbox,
 | Article Library | Searchable/filterable scored article workspace |
 | Client Relevance | Client profiles + article matching |
 | Content Generator | Multi-format AI content generation from articles |
-| Settings | Microsoft connection, summary format preference |
+| Settings | Microsoft connection, LinkedIn connection, summary format preference |
 
 ## Required Environment Variables
 
@@ -35,21 +35,26 @@ Newsletter Digest is a Busibox app that connects a user's Microsoft 365 mailbox,
 MS_CLIENT_ID=<azure-app-client-id>
 MS_CLIENT_SECRET=<from Azure app registration>
 MS_REDIRECT_URI=http://localhost:3002/api/oauth/callback
+LINKEDIN_CLIENT_ID=<linkedin-app-client-id>
+LINKEDIN_CLIENT_SECRET=<from LinkedIn app configuration>
+LINKEDIN_REDIRECT_URI=http://localhost:3002/api/linkedin/callback
 ```
 
 For production deployment behind the Busibox app path:
 
 ```bash
 MS_REDIRECT_URI=https://<busibox-domain>/newsletter-digest/api/oauth/callback
+LINKEDIN_REDIRECT_URI=https://<busibox-domain>/newsletter-digest/api/linkedin/callback
 ```
 
 The app also uses the standard Busibox template environment for SSO, data-api, agent-api, and AuthZ token exchange.
 
-## Data Documents (8)
+## Data Documents (9)
 
 | Document | Purpose |
 |---|---|
 | `newsletter-digest-connections` | Microsoft account metadata, encrypted token reference, sync status |
+| `newsletter-digest-linkedin-connections` | LinkedIn member metadata, encrypted token reference, publish status |
 | `newsletter-digest-subscriptions` | Discovered sender metadata |
 | `newsletter-digest-emails` | Synced newsletter content (sender, subject, plain text body, dates) |
 | `newsletter-digest-summaries` | Structured AI summaries (title, tldr, keyPoints, actionItems, topics) |
@@ -70,6 +75,14 @@ All documents are personal visibility by default.
 | `/api/oauth/status` | GET | Return connection status |
 | `/api/oauth/disconnect` | POST | Delete tokens + connection record |
 
+### LinkedIn OAuth
+| Route | Method | Purpose |
+|---|---|---|
+| `/api/linkedin/authorize` | GET | Start LinkedIn OIDC + posting consent flow |
+| `/api/linkedin/callback` | GET | Exchange code for tokens, encrypt via keystore, store |
+| `/api/linkedin/status` | GET | Return LinkedIn connection status |
+| `/api/linkedin/disconnect` | POST | Delete LinkedIn tokens + connection record |
+
 ### Newsletters
 | Route | Method | Purpose |
 |---|---|---|
@@ -83,6 +96,7 @@ All documents are personal visibility by default.
 |---|---|---|
 | `/api/content` | GET | List generated drafts |
 | `/api/content/generate` | POST | Generate content from article (LinkedIn, email, etc.) |
+| `/api/content/[id]/publish-linkedin` | POST | Publish a stored LinkedIn draft directly to the connected profile |
 
 ### Clients
 | Route | Method | Purpose |
@@ -110,6 +124,8 @@ Supported tones: Analytical, Executive, Conversational, Punchy, Sober, Visionary
 
 The generator calls `agent-api` with a strict JSON response schema and persists validated output to data-api.
 
+LinkedIn publishing uses the official LinkedIn OAuth + Posts API path. V1 is intentionally limited to personal profile publishing only: no inbox, comment sync, post-history import, or tone-memory from historical posts.
+
 ## Core Flow
 
 1. Open Settings and connect Microsoft 365 (requires registered redirect URI and client secret).
@@ -119,7 +135,8 @@ The generator calls `agent-api` with a strict JSON response schema and persists 
 5. Article Library shows scored articles with search, filter, and sort.
 6. Generate a summary from any article using your preferred format.
 7. Open Content Generator from an article to create LinkedIn posts, emails, etc.
-8. Generated drafts are persisted and shown in Recent Drafts.
+8. Connect LinkedIn from Settings if you want direct publishing instead of copy/paste.
+9. Generated drafts are persisted, shown in Recent Drafts, and LinkedIn drafts can be published directly from the stored draft record.
 
 ## Development
 

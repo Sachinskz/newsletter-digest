@@ -42,7 +42,13 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
   const summaryFormat = preferences?.summaryFormat || DEFAULT_SUMMARY_FORMAT;
 
   try {
-    const output = await requestNewsletterSummary(auth.apiToken, newsletter, summaryFormat);
+    const output = await requestNewsletterSummary(auth.apiToken, newsletter, summaryFormat).catch((error) => {
+      console.error("[newsletters/summarize] All summarization paths failed, using fallback:", {
+        emailId: newsletter.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return buildFallbackSummary(newsletter, summaryFormat);
+    });
     const summary = await createSummary(dataAuth.apiToken, ids.summaries, newsletter.id, output, summaryFormat);
     await markEmailSummarized(dataAuth.apiToken, ids.emails, newsletter.id, summary.id);
     return NextResponse.json({ summary });

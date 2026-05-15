@@ -123,5 +123,19 @@ describe("client relevance route", () => {
     expect(body.articleCount).toBe(3);
     expect(body.clients).toEqual(clients);
     expect(body.matches[0].id).toBe("match-1");
+    expect(body.backend).toEqual({
+      clientProfileDocument: "ready",
+      clientCrudRoutes: "ready",
+      matchPersistence: "ready",
+      refreshMode: "on_read",
+    });
+    expect(body.stats).toEqual({
+      articleCount: 3,
+      clientCount: 1,
+      matchCount: 1,
+      matchedClientCount: 1,
+      unmatchedClientCount: 0,
+    });
+    expect(typeof body.lastRefreshedAt).toBe("string");
   });
 });

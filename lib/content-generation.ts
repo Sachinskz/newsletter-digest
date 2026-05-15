@@ -53,48 +53,51 @@ export function getContentKindLabel(kind: ContentKind): string {
 }
 
 export function buildContentPrompt({
-  article,
+  articles,
   kind,
   tone,
   client,
 }: {
-  article: LibraryArticle;
+  articles: LibraryArticle[];
   kind: ContentKind;
   tone: ContentTone;
   client?: ClientProfile | null;
 }): string {
-  const kindInstruction = getKindInstruction(kind);
   const clientContext = client
-    ? `\nClient context:\nName: ${client.name}\nSector: ${client.sector}\nPriorities: ${client.priorities}\nTopics: ${client.topics.join(", ")}`
+    ? `\nFor client: ${client.name} (${client.sector})\nWhat they care about: ${client.priorities}\nTopics they track: ${client.topics.join(", ")}`
     : "";
 
-  return `Create production-ready business content from this AI newsletter article.
+  if (articles.length === 1) {
+    const article = articles[0];
+    return `Write a ${getContentKindLabel(kind)} in a ${tone} tone from this article.${clientContext}
 
-Use the requested output type and tone. Be specific, useful, and grounded in the source context. Do not invent facts, numbers, or claims not supported by the article context. Avoid hype.
-
-Output type: ${getContentKindLabel(kind)}
-Tone: ${tone}
-Instruction: ${kindInstruction}
-
-Article:
-Title: ${article.title}
+Article: ${article.title}
 Source: ${article.source}
-Category: ${article.category}
 Summary: ${article.summary}
 Why it matters: ${article.why}
-Companies: ${article.companies.join(", ") || "None specified"}
-Topics: ${article.topics.join(", ") || "None specified"}
-Importance: ${article.importance}
-Novelty: ${article.novelty}
-Urgency: ${article.urgency}${clientContext}
+${article.companies.length ? `Companies mentioned: ${article.companies.join(", ")}` : ""}
+${article.topics.length ? `Topics: ${article.topics.join(", ")}` : ""}`;
+  }
 
-Return your response as a single valid JSON object with exactly these four fields (no markdown fences, no extra text):
-{
-  "title": "an internal label for the draft",
-  "subject": "email subject when output type is Client email; otherwise an empty string",
-  "body": "the final usable draft",
-  "notes": "short review guidance for the human operator"
-}`;
+  const articleBlocks = articles
+    .map(
+      (article, i) => `Article ${i + 1}: ${article.title}
+Source: ${article.source}
+Summary: ${article.summary}
+Why it matters: ${article.why}
+${article.companies.length ? `Companies mentioned: ${article.companies.join(", ")}` : ""}
+${article.topics.length ? `Topics: ${article.topics.join(", ")}` : ""}`,
+    )
+    .join("\n\n");
+
+  return `Write a single ${getContentKindLabel(kind)} in a ${tone} tone that synthesizes the ${articles.length} articles below into one unified post.${clientContext}
+
+Rules:
+- Do NOT summarize each article separately — find the connective thread across all of them
+- Weave their perspectives together: where they agree, where they differ, what the combined picture reveals
+- The output is ONE piece of content, not a list
+
+${articleBlocks}`;
 }
 
 export function parseGeneratedContentOutput(value: unknown): GeneratedContentOutput {
@@ -124,48 +127,111 @@ export function parseGeneratedContentOutput(value: unknown): GeneratedContentOut
   };
 }
 
-/** Robust JSON extraction — handles fences, embedded objects, missing braces, unescaped newlines */
+/**
+ * Robust JSON extraction. Handles:
+ * - <think>...</think> tags (Qwen/DeepSeek)
+ * - Plain "Thinking Process:" preambles with arbitrary {/} in the thinking text
+ * - Markdown code fences anywhere in the string
+ * - Unescaped newlines inside string values
+ * - JSON appearing anywhere in the output (before or after extra text)
+ */
 function extractJsonFromLLM(raw: string): unknown {
-  const cleaned = raw.trim();
-  try { return JSON.parse(cleaned); } catch { /* continue */ }
+  // Strip think tags
+  const deThought = raw.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
 
-  const withoutFence = cleaned.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+  // Strip a single outer code fence if the whole string is wrapped
+  const withoutFence = deThought
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```\s*$/i, "")
+    .trim();
+
+  // Try the entire cleaned string first
   try { return JSON.parse(withoutFence); } catch { /* continue */ }
+  try { return JSON.parse(repairJsonString(withoutFence)); } catch { /* continue */ }
 
-  const firstBrace = withoutFence.indexOf("{");
-  const lastBrace = withoutFence.lastIndexOf("}");
-  if (firstBrace !== -1 && lastBrace > firstBrace) {
-    const slice = withoutFence.slice(firstBrace, lastBrace + 1);
-    try { return JSON.parse(slice); } catch { /* continue */ }
-    try { return JSON.parse(repairJsonString(slice)); } catch { /* continue */ }
-  }
-
-  if (withoutFence.includes('"') && !withoutFence.startsWith("{")) {
-    const wrapped = `{${withoutFence}}`;
-    try { return JSON.parse(wrapped); } catch { /* continue */ }
-    try { return JSON.parse(repairJsonString(wrapped)); } catch { /* continue */ }
+  // Find every properly-bounded JSON object in the string using string-aware
+  // brace matching. Try them from LAST to FIRST — thinking preambles always
+  // appear before the final JSON output.
+  const candidates = findAllJsonObjects(withoutFence);
+  for (let i = candidates.length - 1; i >= 0; i--) {
+    const c = candidates[i];
+    try {
+      const parsed = JSON.parse(c);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
+    } catch { /* continue */ }
+    try {
+      const parsed = JSON.parse(repairJsonString(c));
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
+    } catch { /* continue */ }
   }
 
   throw new Error(`Could not extract JSON from LLM output: ${raw.slice(0, 200)}`);
 }
 
+/**
+ * Walk the string character-by-character, respecting string literals, and
+ * return every complete top-level JSON object found.
+ */
+function findAllJsonObjects(text: string): string[] {
+  const results: string[] = [];
+  let i = 0;
+  while (i < text.length) {
+    if (text[i] !== "{") { i++; continue; }
+    let depth = 0;
+    let inStr = false;
+    let esc = false;
+    let j = i;
+    let closed = false;
+    while (j < text.length) {
+      const ch = text[j];
+      if (esc) { esc = false; }
+      else if (ch === "\\" && inStr) { esc = true; }
+      else if (ch === '"') { inStr = !inStr; }
+      else if (!inStr) {
+        if (ch === "{") depth++;
+        else if (ch === "}") {
+          depth--;
+          if (depth === 0) { closed = true; break; }
+        }
+      }
+      j++;
+    }
+    if (closed) {
+      results.push(text.slice(i, j + 1));
+      i = j + 1;
+    } else {
+      i++;
+    }
+  }
+  return results;
+}
+
 export async function requestContentGeneration(
   agentApiToken: string,
-  params: { article: LibraryArticle; kind: ContentKind; tone: ContentTone; client?: ClientProfile | null },
+  params: { articles: LibraryArticle[]; kind: ContentKind; tone: ContentTone; client?: ClientProfile | null },
 ): Promise<GeneratedContentOutput> {
   const TIMEOUT_MS = 120000;
   const prompt = buildContentPrompt(params);
 
   console.log("[ContentGeneration] Using BusiBox agent:", CONTENT_AGENT_NAME, "tier:", CONTENT_AGENT_TIER);
 
-  // Agent-first: BusiBox content-generator (Claude Sonnet) → OpenRouter fallback
+  // Agent-first: BusiBox content-generator (Claude Sonnet) → OpenRouter → local model
   try {
     return await invokeContentGeneratorAgent(agentApiToken, prompt, TIMEOUT_MS);
   } catch (agentError) {
-    console.warn("[ContentGeneration] Agent invocation failed, falling back to OpenRouter:",
+    console.warn("[ContentGeneration] Agent invocation failed, trying direct LLM:",
       agentError instanceof Error ? agentError.message : String(agentError));
-    return await directLLMGenerate(agentApiToken, params, TIMEOUT_MS);
   }
+
+  try {
+    return await directLLMGenerate(agentApiToken, params, TIMEOUT_MS);
+  } catch (llmError) {
+    console.warn("[ContentGeneration] Direct LLM failed, trying local model fallback:",
+      llmError instanceof Error ? llmError.message : String(llmError));
+  }
+
+  // Last resort: local model via agent-api completions (no OpenRouter)
+  return await localModelFallback(agentApiToken, prompt, TIMEOUT_MS);
 }
 
 async function invokeContentGeneratorAgent(
@@ -219,14 +285,14 @@ async function invokeContentGeneratorAgent(
 
 async function directLLMGenerate(
   agentApiToken: string,
-  params: { article: LibraryArticle; kind: ContentKind; tone: ContentTone; client?: ClientProfile | null },
+  params: { articles: LibraryArticle[]; kind: ContentKind; tone: ContentTone; client?: ClientProfile | null },
   timeoutMs: number,
 ): Promise<GeneratedContentOutput> {
   const messages = [
     {
       role: "system" as const,
-      content: `You are a business content writer. Given an article summary, produce production-ready content. Return ONLY a JSON object (no markdown fences, no extra text):
-{"title":"internal label","subject":"email subject or empty string","body":"the final draft","notes":"short review guidance"}`,
+      content: `You write business content that sounds like a smart, well-read person wrote it — not an AI. Be specific, use the article's actual facts and figures, and skip hollow phrases. Return ONLY a JSON object (no markdown fences, no extra text):
+{"title":"short internal label","subject":"email subject or empty string","body":"the finished draft","notes":"one honest editorial note"}`,
     },
     {
       role: "user" as const,
@@ -298,6 +364,56 @@ async function directLLMGenerate(
   }
 }
 
+async function localModelFallback(
+  agentApiToken: string,
+  prompt: string,
+  timeoutMs: number,
+): Promise<GeneratedContentOutput> {
+  console.log("[ContentGeneration] Using local model fallback via agent-api");
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const res = await fetch(`${AGENT_API_URL}/llm/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${agentApiToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: process.env.NEWSLETTER_LLM_MODEL || "fast",
+        messages: [
+          {
+            role: "system",
+            content: `You write business content. Return ONLY a JSON object — no markdown fences, no extra text:
+{"title":"short internal label","subject":"email subject or empty string","body":"the finished draft","notes":"one sentence of editorial feedback"}`,
+          },
+          { role: "user", content: prompt },
+        ],
+        temperature: 0.4,
+        max_tokens: 1500,
+      }),
+      signal: controller.signal,
+    });
+
+    if (!res.ok) {
+      const err = await res.text().catch(() => "no body");
+      throw new Error(`Local model fallback failed (${res.status}): ${err.slice(0, 200)}`);
+    }
+
+    const data = await res.json();
+    const raw = stripThinking(data.content || "");
+    return parseGeneratedContentOutput(raw);
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error(`Local model fallback timed out after ${timeoutMs}ms`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 /** Strip Qwen-style <think>...</think> reasoning from output */
 function stripThinking(content: string): string {
   const thinkEnd = content.indexOf("</think>");
@@ -329,52 +445,32 @@ function normalizeContentOutput(value: unknown): unknown {
     try {
       return normalizeContentOutput(JSON.parse(withoutFence));
     } catch {
-      // Try extracting an embedded JSON object
-      const embeddedJson = extractJSONObject(withoutFence);
-      if (embeddedJson) {
-        try {
-          return normalizeContentOutput(JSON.parse(embeddedJson));
-        } catch {
-          // fall through
-        }
+      // Try extracting the last JSON object (thinking preambles come first)
+      const candidates = findAllJsonObjects(withoutFence);
+      for (let ci = candidates.length - 1; ci >= 0; ci--) {
+        try { return normalizeContentOutput(JSON.parse(candidates[ci])); } catch { /* continue */ }
+        try { return normalizeContentOutput(JSON.parse(repairJsonString(candidates[ci]))); } catch { /* continue */ }
       }
 
       // LLM sometimes returns JSON without outer braces: "key": "value", ...
       // Try wrapping in braces
       const cleaned = withoutFence.trim();
-      console.log("[ContentGeneration] extractJSONObject returned:", embeddedJson ? "non-null" : "null");
-      console.log("[ContentGeneration] cleaned startsWith quote:", cleaned.startsWith('"'), "startsWith brace:", cleaned.startsWith('{'));
-      console.log("[ContentGeneration] cleaned first 80:", JSON.stringify(cleaned.slice(0, 80)));
-      console.log("[ContentGeneration] cleaned last 80:", JSON.stringify(cleaned.slice(-80)));
 
       // Strategy 1: wrap in braces if it looks like key-value pairs
       if (cleaned.startsWith('"') && !cleaned.startsWith('{')) {
         const wrapped = `{${cleaned}}`;
         try {
           return normalizeContentOutput(JSON.parse(wrapped));
-        } catch (wrapError) {
-          console.log("[ContentGeneration] Brace-wrap failed:", (wrapError as Error).message);
-          // Try to repair: escape unescaped newlines inside string values
+        } catch {
           const repaired = repairJsonString(wrapped);
-          console.log("[ContentGeneration] Repaired first 200:", JSON.stringify(repaired.slice(0, 200)));
-          console.log("[ContentGeneration] Repaired last 200:", JSON.stringify(repaired.slice(-200)));
-          try {
-            return normalizeContentOutput(JSON.parse(repaired));
-          } catch (repairError) {
-            console.log("[ContentGeneration] Repair+parse also failed:", (repairError as Error).message);
-          }
+          try { return normalizeContentOutput(JSON.parse(repaired)); } catch { /* continue */ }
         }
       }
 
       // Strategy 2: even if it doesn't start with quote, try wrapping
       {
-        const wrapped = cleaned.startsWith('{') ? cleaned : `{${cleaned}}`;
-        const repaired = repairJsonString(wrapped);
-        try {
-          return normalizeContentOutput(JSON.parse(repaired));
-        } catch (e) {
-          console.log("[ContentGeneration] Final repair attempt failed:", (e as Error).message);
-        }
+        const wrapped = cleaned.startsWith("{") ? cleaned : `{${cleaned}}`;
+        try { return normalizeContentOutput(JSON.parse(repairJsonString(wrapped))); } catch { /* continue */ }
       }
 
       // Return the string as-is — caller will handle validation error
@@ -402,30 +498,6 @@ function normalizeContentOutput(value: unknown): unknown {
   }
 
   return value;
-}
-
-function extractJSONObject(value: string): string | null {
-  const firstBrace = value.indexOf("{");
-  const lastBrace = value.lastIndexOf("}");
-
-  // Normal case: found { and }
-  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-    return value.slice(firstBrace, lastBrace + 1);
-  }
-
-  // LLM sometimes omits the outer braces — try wrapping the string
-  const trimmed = value.trim();
-  if (trimmed.startsWith('"') && (trimmed.endsWith('"') || trimmed.endsWith("}"))) {
-    const candidate = `{${trimmed}}`;
-    try {
-      JSON.parse(candidate);
-      return candidate;
-    } catch {
-      // Not valid even with braces
-    }
-  }
-
-  return null;
 }
 
 function hasRequiredContentFields(value: unknown): boolean {

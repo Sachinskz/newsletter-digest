@@ -12,6 +12,7 @@ const article: LibraryArticle = {
   importance: 91,
   novelty: 78,
   urgency: 82,
+  personalFit: 75,
   companies: ["OpenAI"],
   topics: ["agents", "workflow"],
   receivedAt: "2026-05-13T10:00:00.000Z",
@@ -21,7 +22,7 @@ const article: LibraryArticle = {
 describe("content generation helpers", () => {
   it("builds client-aware email prompts", () => {
     const prompt = buildContentPrompt({
-      article,
+      articles: [article],
       kind: "email",
       tone: "Executive",
       client: {
@@ -35,10 +36,9 @@ describe("content generation helpers", () => {
       },
     });
 
-    expect(prompt).toContain("Output type: Client email");
-    expect(prompt).toContain("Client context:");
+    expect(prompt).toContain("Client email");
+    expect(prompt).toContain("For client:");
     expect(prompt).toContain("Meridian Capital");
-    expect(prompt).toContain("Do not invent facts");
   });
 
   it("rejects malformed generated output", () => {

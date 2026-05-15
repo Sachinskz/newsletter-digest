@@ -46,15 +46,37 @@ describe("preferences data helpers", () => {
   it("creates preferences on first save", async () => {
     mocks.queryRecords.mockResolvedValue({ records: [] });
 
-    const preferences = await upsertPreferences("token", "preferences-doc", "key_insights");
+    const preferences = await upsertPreferences("token", "preferences-doc", {
+      summaryFormat: "key_insights",
+      roleTitle: "Founder",
+      interests: ["agents", "ops"],
+      rankingPriorities: ["Client relevance", "Revenue opportunities"],
+    });
 
     expect(preferences).toEqual({
       id: DEFAULT_PREFERENCES_ID,
       summaryFormat: "key_insights",
+      roleTitle: "Founder",
+      primaryFocus: undefined,
+      interests: ["agents", "ops"],
+      wantsToKnow: undefined,
+      rankingPriorities: ["Client relevance", "Revenue opportunities"],
       createdAt: "2026-05-13T10:00:00.000Z",
       updatedAt: "2026-05-13T10:00:00.000Z",
     });
-    expect(mocks.insertRecords).toHaveBeenCalledWith("token", "preferences-doc", [preferences]);
+    expect(mocks.insertRecords).toHaveBeenCalledWith(
+      "token",
+      "preferences-doc",
+      [
+        expect.objectContaining({
+          id: DEFAULT_PREFERENCES_ID,
+          summaryFormat: "key_insights",
+          roleTitle: "Founder",
+          interests: JSON.stringify(["agents", "ops"]),
+          rankingPriorities: JSON.stringify(["Client relevance", "Revenue opportunities"]),
+        }),
+      ],
+    );
     expect(mocks.updateRecords).not.toHaveBeenCalled();
   });
 
@@ -64,16 +86,26 @@ describe("preferences data helpers", () => {
         {
           id: DEFAULT_PREFERENCES_ID,
           summaryFormat: "bullet_points",
+          roleTitle: "Ops lead",
+          interests: JSON.stringify(["governance"]),
+          rankingPriorities: JSON.stringify(["Risk and regulation"]),
           createdAt: "2026-05-12T10:00:00.000Z",
           updatedAt: "2026-05-12T10:00:00.000Z",
         },
       ],
     });
 
-    const preferences = await upsertPreferences("token", "preferences-doc", "full_digest");
+    const preferences = await upsertPreferences("token", "preferences-doc", {
+      summaryFormat: "full_digest",
+      primaryFocus: "Internal AI operations",
+    });
 
     expect(preferences.createdAt).toBe("2026-05-12T10:00:00.000Z");
     expect(preferences.summaryFormat).toBe("full_digest");
+    expect(preferences.roleTitle).toBe("Ops lead");
+    expect(preferences.primaryFocus).toBe("Internal AI operations");
+    expect(preferences.interests).toEqual(["governance"]);
+    expect(preferences.rankingPriorities).toEqual(["Risk and regulation"]);
     expect(mocks.updateRecords).toHaveBeenCalled();
     expect(mocks.insertRecords).not.toHaveBeenCalled();
   });

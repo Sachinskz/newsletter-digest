@@ -10,6 +10,7 @@ import {
   LoaderCircle,
   Pencil,
   Plus,
+  Sparkles,
   Trash2,
   Users,
 } from "lucide-react";
@@ -38,34 +39,81 @@ const EMPTY_FORM: ClientFormState = {
   matchThreshold: "42",
 };
 
+type ClientRelevanceBackend = {
+  clientProfileDocument: "ready";
+  clientCrudRoutes: "ready";
+  matchPersistence: "ready";
+  refreshMode: "on_read";
+};
+
+type ClientRelevanceStats = {
+  articleCount: number;
+  clientCount: number;
+  matchCount: number;
+  matchedClientCount: number;
+  unmatchedClientCount: number;
+};
+
 export default function ClientsPage() {
-  const [articleCount, setArticleCount] = useState(0);
   const [clients, setClients] = useState<NewsletterClientProfile[]>([]);
   const [matches, setMatches] = useState<NewsletterClientMatch[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
+  const [enrichSource, setEnrichSource] = useState("");
+  const [enriching, setEnriching] = useState(false);
+  const [enrichError, setEnrichError] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
   const [form, setForm] = useState<ClientFormState>(EMPTY_FORM);
+  const [stats, setStats] = useState<ClientRelevanceStats>({
+    articleCount: 0,
+    clientCount: 0,
+    matchCount: 0,
+    matchedClientCount: 0,
+    unmatchedClientCount: 0,
+  });
+  const [backend, setBackend] = useState<ClientRelevanceBackend>({
+    clientProfileDocument: "ready",
+    clientCrudRoutes: "ready",
+    matchPersistence: "ready",
+    refreshMode: "on_read",
+  });
+  const [lastRefreshedAt, setLastRefreshedAt] = useState<string | null>(null);
 
-  async function loadWorkspace() {
+  async function loadWorkspace(options?: { preserveLoading?: boolean }) {
     setError(null);
-    const res = await fetch("/api/client-relevance");
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      throw new Error(data.error || "Could not load client relevance workspace");
-    }
+    if (!options?.preserveLoading) setRefreshing(true);
+    try {
+      const res = await fetch("/api/client-relevance");
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || "Could not load client relevance workspace");
+      }
 
-    const nextClients = (data.clients || []) as NewsletterClientProfile[];
-    setClients(nextClients);
-    setMatches((data.matches || []) as NewsletterClientMatch[]);
-    setArticleCount(typeof data.articleCount === "number" ? data.articleCount : 0);
-    setSelectedClientId((current) => {
-      if (current && nextClients.some((client) => client.id === current)) return current;
-      return nextClients[0]?.id || null;
-    });
+      const nextClients = (data.clients || []) as NewsletterClientProfile[];
+      setClients(nextClients);
+      setMatches((data.matches || []) as NewsletterClientMatch[]);
+      setStats({
+        articleCount: typeof data.stats?.articleCount === "number" ? data.stats.articleCount : 0,
+        clientCount: typeof data.stats?.clientCount === "number" ? data.stats.clientCount : nextClients.length,
+        matchCount: typeof data.stats?.matchCount === "number" ? data.stats.matchCount : (data.matches || []).length,
+        matchedClientCount: typeof data.stats?.matchedClientCount === "number" ? data.stats.matchedClientCount : 0,
+        unmatchedClientCount: typeof data.stats?.unmatchedClientCount === "number" ? data.stats.unmatchedClientCount : 0,
+      });
+      if (data.backend) {
+        setBackend(data.backend as ClientRelevanceBackend);
+      }
+      setLastRefreshedAt(typeof data.lastRefreshedAt === "string" ? data.lastRefreshedAt : null);
+      setSelectedClientId((current) => {
+        if (current && nextClients.some((client) => client.id === current)) return current;
+        return nextClients[0]?.id || null;
+      });
+    } finally {
+      if (!options?.preserveLoading) setRefreshing(false);
+    }
   }
 
   useEffect(() => {
@@ -73,15 +121,24 @@ export default function ClientsPage() {
 
     async function hydrate() {
       try {
-        await loadWorkspace();
+        await loadWorkspace({ preserveLoading: true });
       } catch (loadError) {
         if (!alive) return;
         setError(loadError instanceof Error ? loadError.message : "Could not load client relevance workspace");
         setClients([]);
         setMatches([]);
-        setArticleCount(0);
+        setStats({
+          articleCount: 0,
+          clientCount: 0,
+          matchCount: 0,
+          matchedClientCount: 0,
+          unmatchedClientCount: 0,
+        });
       } finally {
-        if (alive) setLoading(false);
+        if (alive) {
+          setLoading(false);
+          setRefreshing(false);
+        }
       }
     }
 
@@ -101,10 +158,47 @@ export default function ClientsPage() {
     return matches.filter((match) => match.clientId === selectedClient.id).slice(0, 8);
   }, [matches, selectedClient]);
 
+  const matchCountByClient = useMemo(() => {
+    return matches.reduce<Record<string, number>>((accumulator, match) => {
+      accumulator[match.clientId] = (accumulator[match.clientId] || 0) + 1;
+      return accumulator;
+    }, {});
+  }, [matches]);
+
   function resetForm() {
     setForm(EMPTY_FORM);
     setEditingId(null);
     setFormError(null);
+  }
+
+  async function enrichClient() {
+    if (!enrichSource.trim()) return;
+    setEnriching(true);
+    setEnrichError(null);
+    try {
+      const res = await fetch("/api/clients/enrich", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source: enrichSource.trim() }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Could not enrich client profile");
+
+      const client = data.client as { name: string; sector: string; topics: string[]; notes: string };
+      setForm((current) => ({
+        ...current,
+        name: client.name || current.name,
+        sector: client.sector || current.sector,
+        topics: client.topics?.join(", ") || current.topics,
+        notes: client.notes || current.notes,
+      }));
+      setEnrichSource("");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Could not enrich client profile";
+      setEnrichError(msg);
+    } finally {
+      setEnriching(false);
+    }
   }
 
   function startEditing(client: NewsletterClientProfile) {
@@ -158,7 +252,7 @@ export default function ClientsPage() {
       }
 
       const savedClient = data.client as NewsletterClientProfile;
-      await loadWorkspace();
+      await loadWorkspace({ preserveLoading: true });
       setSelectedClientId(savedClient.id);
       resetForm();
     } catch (saveError) {
@@ -177,22 +271,12 @@ export default function ClientsPage() {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || "Could not delete client");
 
-      await loadWorkspace();
+      await loadWorkspace({ preserveLoading: true });
       if (editingId === id) resetForm();
     } catch (deleteError) {
       setFormError(deleteError instanceof Error ? deleteError.message : "Could not delete client");
     }
   }
-
-  const checklistStatus: {
-    profile: "ready" | "missing";
-    crud: "ready";
-    matching: "ready" | "missing";
-  } = {
-    profile: clients.length > 0 ? "ready" : "missing",
-    crud: "ready" as const,
-    matching: clients.length > 0 && articleCount > 0 ? "ready" : "missing",
-  };
 
   return (
     <div className="grid grid-cols-12 gap-6 text-[#e7e9ee]">
@@ -200,40 +284,52 @@ export default function ClientsPage() {
         <div className="analyst-glass rounded-2xl p-6">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
-              <div className="mb-2 text-[18px] font-semibold text-white">Client relevance is started</div>
+              <div className="mb-2 text-[18px] font-semibold text-white">Client relevance is live</div>
               <p className="max-w-2xl text-[13px] leading-relaxed text-white/60">
-                Client profiles and article matches now persist in data-api. This page is reading stored relevance records instead of calculating everything
-                in the browser, so the backend path is now live.
+                Client profiles and article matches now persist in data-api. This page reads stored relevance records from the backend and separates
+                infrastructure readiness from workspace population, so an empty account no longer looks like a missing feature.
               </p>
             </div>
-            <button className="analyst-btn" type="button" onClick={resetForm}>
-              <Plus size={13} />
-              New client
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <button className="analyst-btn" type="button" onClick={() => void loadWorkspace()} disabled={refreshing}>
+                {refreshing ? <LoaderCircle size={13} className="animate-spin" /> : <Link2 size={13} />}
+                {refreshing ? "Refreshing..." : "Refresh matches"}
+              </button>
+              <button className="analyst-btn" type="button" onClick={resetForm}>
+                <Plus size={13} />
+                New client
+              </button>
+            </div>
           </div>
 
           <div className="mt-5 grid gap-3 sm:grid-cols-3">
             <StatusCard
               icon={CheckCircle2}
               title="Articles available"
-              value={loading ? "Loading..." : `${articleCount}`}
-              body="Real newsletter-derived articles currently in the app."
-              tone="good"
+              value={loading ? "Loading..." : `${stats.articleCount}`}
+              body="Real newsletter-derived articles currently indexed for relevance."
+              tone={stats.articleCount > 0 ? "good" : "warn"}
             />
             <StatusCard
               icon={Users}
               title="Client profiles"
-              value={loading ? "Loading..." : `${clients.length}`}
-              body="Persisted client records stored in the app backend."
-              tone={clients.length > 0 ? "good" : "warn"}
+              value={loading ? "Loading..." : `${stats.clientCount}`}
+              body="Persisted client records stored in the backend."
+              tone={stats.clientCount > 0 ? "good" : "warn"}
             />
             <StatusCard
               icon={Link2}
-              title="Matching status"
-              value={clients.length > 0 && articleCount > 0 ? "Persisted" : "Waiting"}
-              body="Deterministic client/article scoring is refreshed on the backend and stored for reuse."
-              tone={clients.length > 0 && articleCount > 0 ? "good" : "warn"}
+              title="Stored matches"
+              value={loading ? "Loading..." : `${stats.matchCount}`}
+              body="Persisted client/article scoring records ready for reuse across the app."
+              tone={stats.matchCount > 0 ? "good" : "warn"}
             />
+          </div>
+
+          <div className="mt-4 flex flex-wrap items-center gap-2 text-[11.5px] text-white/48">
+            <span className="analyst-chip analyst-chip-good">Backend ready</span>
+            <span>Refresh mode: on-read recompute + persistence</span>
+            {lastRefreshedAt ? <span>Last refreshed {formatReceivedAt(lastRefreshedAt)}</span> : null}
           </div>
         </div>
 
@@ -241,6 +337,35 @@ export default function ClientsPage() {
           <div className="mb-4 flex items-center gap-2">
             <BriefcaseBusiness size={15} className="text-white/70" />
             <div className="text-[14px] font-medium text-white">{editingId ? "Edit client profile" : "Add client profile"}</div>
+          </div>
+
+          <div className="mb-4 rounded-xl border border-white/8 bg-white/[0.03] p-3">
+            <div className="mb-2 flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-white/45">
+              <Sparkles size={11} />
+              Auto-fill name, sector, topics &amp; notes
+            </div>
+            <div className="flex gap-2">
+              <input
+                className="analyst-input flex-1"
+                value={enrichSource}
+                onChange={(event) => setEnrichSource(event.target.value)}
+                onKeyDown={(event) => { if (event.key === "Enter") void enrichClient(); }}
+                placeholder="e.g. Goldman Sachs or https://acme.com"
+                disabled={enriching}
+              />
+              <button
+                type="button"
+                className="analyst-btn analyst-btn-primary shrink-0"
+                onClick={() => void enrichClient()}
+                disabled={enriching || !enrichSource.trim()}
+              >
+                {enriching ? <LoaderCircle size={13} className="animate-spin" /> : <Sparkles size={13} />}
+                {enriching ? "Populating..." : "Populate"}
+              </button>
+            </div>
+            {enrichError ? (
+              <div className="mt-2 text-[11.5px] text-red-300">{enrichError}</div>
+            ) : null}
           </div>
 
           <div className="grid gap-3 sm:grid-cols-2">
@@ -355,6 +480,9 @@ export default function ClientsPage() {
                           {client.accountOwner ? ` · ${client.accountOwner}` : ""}
                           {client.relationshipStage ? ` · ${client.relationshipStage}` : ""}
                         </div>
+                        <div className="mt-2 text-[11px] text-white/42">
+                          {matchCountByClient[client.id] || 0} stored matches · threshold {client.matchThreshold ?? 42}+
+                        </div>
                         <div className="mt-2 flex flex-wrap gap-1.5">
                           {client.topics.map((topic) => (
                             <span key={topic} className="analyst-chip text-[10px]">
@@ -385,9 +513,17 @@ export default function ClientsPage() {
         <div className="analyst-glass sticky top-6 rounded-2xl p-5">
           <div className="mb-3 text-[13px] font-medium text-white">Backend checklist</div>
           <div className="space-y-3">
-            <ChecklistRow icon={Database} label="Client profile document" status={checklistStatus.profile} />
-            <ChecklistRow icon={Users} label="Client CRUD routes" status={checklistStatus.crud} />
-            <ChecklistRow icon={Link2} label="Article-to-client match persistence" status={checklistStatus.matching} />
+            <ChecklistRow icon={Database} label="Client profile document" status={backend.clientProfileDocument} />
+            <ChecklistRow icon={Users} label="Client CRUD routes" status={backend.clientCrudRoutes} />
+            <ChecklistRow icon={Link2} label="Article-to-client match persistence" status={backend.matchPersistence} />
+          </div>
+
+          <div className="my-4 border-t border-white/5" />
+
+          <div className="mb-2 text-[13px] font-medium text-white">Workspace state</div>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <MiniMetric label="Matched clients" value={String(stats.matchedClientCount)} />
+            <MiniMetric label="Waiting on matches" value={String(stats.unmatchedClientCount)} />
           </div>
 
           <div className="my-4 border-t border-white/5" />
@@ -422,7 +558,8 @@ export default function ClientsPage() {
                   ))
                 ) : (
                   <div className="rounded-xl border border-amber-300/20 bg-amber-300/8 p-4 text-[12.5px] leading-relaxed text-amber-100/75">
-                    No stored articles currently clear this client&apos;s threshold. Lower the threshold or add more specific topics if you want broader matches.
+                    No stored articles currently clear this client&apos;s threshold. The backend is healthy; this just means the current article set does not
+                    overlap enough yet. Lower the threshold or broaden topics if you want wider coverage.
                   </div>
                 )}
               </div>
@@ -512,6 +649,15 @@ function ChecklistRow({
         {label}
       </div>
       <span className={`analyst-chip ${chipClass} text-[10px]`}>{status}</span>
+    </div>
+  );
+}
+
+function MiniMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border border-white/5 bg-white/[0.02] px-3 py-2.5">
+      <div className="text-[10px] uppercase tracking-wider text-white/38">{label}</div>
+      <div className="mt-1 text-[15px] font-semibold text-white">{value}</div>
     </div>
   );
 }
