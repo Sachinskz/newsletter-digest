@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 
 export function proxy(request: NextRequest) {
+  // Health check must respond at /api/health regardless of basePath,
+  // because the BusiBox container health checker hits the raw port directly.
+  if (request.nextUrl.pathname === "/api/health") {
+    return NextResponse.json({ status: "healthy", timestamp: new Date().toISOString() });
+  }
+
   const internalPort = process.env.DEV_INTERNAL_PORT || process.env.PORT;
   const proxyPort = process.env.DEV_PROXY_PORT;
   const host = request.headers.get("host") || "";

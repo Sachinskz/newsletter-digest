@@ -17,6 +17,7 @@ coverage/
 # Environment
 .env
 .env.local
+.env.handoff.local
 .env.development.local
 .env.test.local
 .env.production.local
