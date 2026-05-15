@@ -55,7 +55,7 @@ const AGENT_API_URL = process.env.AGENT_API_URL || "http://localhost:8000";
 const LLM_MODEL = process.env.NEWSLETTER_LLM_MODEL || "fast";
 const LLM_CLASSIFY_MODEL = process.env.NEWSLETTER_LLM_CLASSIFY_MODEL || "fast";
 const SUMMARY_TIMEOUT_MS = Number(process.env.NEWSLETTER_SUMMARY_TIMEOUT_MS || 120000);
-const MAX_SUMMARY_INPUT_CHARS = Number(process.env.NEWSLETTER_SUMMARY_INPUT_CHARS || 3200);
+const MAX_SUMMARY_INPUT_CHARS = Number(process.env.NEWSLETTER_SUMMARY_INPUT_CHARS || 6000);
 
 // ---------------------------------------------------------------------------
 // Direct LLM completions call (bypasses broken agent framework)
@@ -430,7 +430,89 @@ export async function requestNewsletterSummary(
   email: NewsletterEmail,
   format: SummaryFormat = DEFAULT_SUMMARY_FORMAT,
 ): Promise<SummaryOutput> {
-  console.log("[Summarize] Single-step summarization for:", email.subject);
+  const agentName = process.env.NEWSLETTER_SUMMARY_AGENT_NAME || "newsletter-analyst";
+  const agentTier = process.env.NEWSLETTER_SUMMARY_AGENT_TIER || "complex";
+  console.log("[Summarize] Using BusiBox agent:", agentName, "tier:", agentTier);
+
+  const preparedText = prepareNewsletterTextForSummary(email.bodyPlainText);
+
+  // The agent's system prompt handles all instructions — keep the user prompt
+  // identical to the bulk-tested format that scored 43/43 valid
+  const prompt = `Sender: ${email.senderName || ""} <${email.senderEmail || ""}>
+Subject: ${email.subject}
+Received: ${email.receivedAt || ""}
+
+Newsletter text:
+${preparedText}`;
+
+  // Try the dedicated BusiBox agent first, fall back to direct LLM
+  try {
+    return await invokeNewsletterAgent(agentApiToken, agentName, agentTier, prompt);
+  } catch (agentError) {
+    console.warn("[Summarize] Agent invocation failed, falling back to direct LLM:",
+      agentError instanceof Error ? agentError.message : String(agentError));
+    return await directLLMSummarize(agentApiToken, email, format);
+  }
+}
+
+async function invokeNewsletterAgent(
+  token: string,
+  agentName: string,
+  agentTier: string,
+  prompt: string,
+): Promise<SummaryOutput> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), SUMMARY_TIMEOUT_MS);
+
+  try {
+    const res = await fetch(`${AGENT_API_URL}/runs/invoke`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        agent_name: agentName,
+        agent_tier: agentTier,
+        input: { prompt },
+      }),
+      signal: controller.signal,
+    });
+
+    if (!res.ok) {
+      const errorBody = await res.text().catch(() => "no body");
+      throw new Error(`Agent invocation failed (${res.status}): ${errorBody.slice(0, 300)}`);
+    }
+
+    const data = await res.json();
+    console.log("[Summarize] Agent response status:", data.status);
+
+    if (data.status === "failed" || data.error) {
+      throw new Error(`Agent run failed: ${data.error || "unknown error"}`);
+    }
+
+    const output = data.output;
+    if (!output) {
+      throw new Error("Agent returned no output");
+    }
+
+    return parseSummaryOutput(output);
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error(`Agent invocation timed out after ${SUMMARY_TIMEOUT_MS}ms`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function directLLMSummarize(
+  token: string,
+  email: NewsletterEmail,
+  format: SummaryFormat,
+): Promise<SummaryOutput> {
+  console.log("[Summarize] Direct LLM fallback for:", email.subject);
 
   const messages: LLMMessage[] = [
     {
@@ -443,12 +525,12 @@ export async function requestNewsletterSummary(
     },
   ];
 
-  const raw = await llmComplete(agentApiToken, messages, {
+  const raw = await llmComplete(token, messages, {
     model: LLM_MODEL,
     maxTokens: 2000,
-    timeoutMs: 120000,
+    timeoutMs: SUMMARY_TIMEOUT_MS,
   });
-  console.log("[Summarize] Raw output length:", raw.length);
+  console.log("[Summarize] Direct LLM output length:", raw.length);
 
   return parseSummaryOutput(raw);
 }
@@ -534,11 +616,12 @@ function getFormatInstruction(format: SummaryFormat): string {
 // ---------------------------------------------------------------------------
 
 export function parseSummaryOutput(value: unknown): SummaryOutput {
-  const normalized = normalizeSummaryValue(value);
+  const unwrapped = normalizeSummaryValue(value);
 
-  if (!normalized || typeof normalized !== "object") {
+  if (!unwrapped || typeof unwrapped !== "object") {
     throw new Error("Summary output must be an object");
   }
+  const normalized = normalizeFieldNames(unwrapped as Record<string, unknown>);
   const output = normalized as Partial<SummaryOutput>;
   if (
     typeof output.title !== "string" ||
@@ -588,14 +671,40 @@ function normalizeSummaryValue(value: unknown): unknown {
   return value;
 }
 
+function normalizeFieldNames(obj: Record<string, unknown>): Record<string, unknown> {
+  const result = { ...obj };
+  if ("key_points" in result && !("keyPoints" in result)) {
+    result.keyPoints = result.key_points;
+    delete result.key_points;
+  }
+  if ("action_items" in result && !("actionItems" in result)) {
+    result.actionItems = result.action_items;
+    delete result.action_items;
+  }
+  if ("read_time_minutes" in result && !("readTimeMinutes" in result)) {
+    result.readTimeMinutes = result.read_time_minutes;
+    delete result.read_time_minutes;
+  }
+  if ("read_time" in result && !("readTimeMinutes" in result)) {
+    const rt = result.read_time;
+    result.readTimeMinutes = typeof rt === "number" ? rt : parseInt(String(rt), 10) || 5;
+    delete result.read_time;
+  }
+  if (typeof result.readTimeMinutes === "string") {
+    result.readTimeMinutes = parseInt(result.readTimeMinutes, 10) || 5;
+  }
+  return result;
+}
+
 function hasSummaryFields(obj: Record<string, unknown>): boolean {
+  const n = normalizeFieldNames(obj);
   return (
-    typeof obj.title === "string" &&
-    typeof obj.tldr === "string" &&
-    Array.isArray(obj.keyPoints) &&
-    Array.isArray(obj.actionItems) &&
-    Array.isArray(obj.topics) &&
-    typeof obj.readTimeMinutes === "number"
+    typeof n.title === "string" &&
+    typeof n.tldr === "string" &&
+    Array.isArray(n.keyPoints) &&
+    Array.isArray(n.actionItems) &&
+    Array.isArray(n.topics) &&
+    typeof n.readTimeMinutes === "number"
   );
 }
 
