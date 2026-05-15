@@ -2,12 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAuthWithTokenExchange } from "@/lib/auth-middleware";
 
 const AGENT_API_URL = process.env.AGENT_API_URL || "http://localhost:8000";
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || "";
+const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6";
+const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || "";
 const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || "anthropic/claude-sonnet-4";
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
-const CONTENT_AGENT_NAME = process.env.CONTENT_GENERATOR_AGENT_NAME || "content-generator";
-const CONTENT_AGENT_TIER = process.env.CONTENT_GENERATOR_AGENT_TIER || "complex";
-
 export interface ClientEnrichmentResult {
   name: string;
   sector: string;
@@ -19,10 +19,19 @@ export interface ClientEnrichmentResult {
   notes: string;
 }
 
-const SYSTEM_PROMPT = `You are a business analyst. Given a company name, website URL, or description, infer a client profile for a consulting relationship. Return ONLY a JSON object — no markdown fences, no extra text:
-{"name":"official company name","sector":"industry sector","topics":["topic1","topic2","topic3","topic4"],"priorities":"one concise sentence on what this client is likely trying to achieve","accountOwner":"Unassigned","relationshipStage":"Prospect","matchThreshold":42,"notes":"one short sentence of account context"}
+const SYSTEM_PROMPT = `You are a business analyst. Given a company name, website URL, or description, infer a likely client profile for a consulting relationship.
 
-Topics should be 3-6 specific business areas they likely track (e.g. AI adoption, regulatory compliance, M&A, digital transformation). Sector should be a concise industry label (e.g. Financial services, Healthcare, Technology).`;
+Return ONLY a JSON object with these exact keys:
+- name: official company name
+- sector: concise industry label
+- topics: array of 3-6 specific business areas they likely track
+- priorities: one concise sentence on what this client is likely trying to achieve
+- accountOwner: use "Unassigned" unless the input explicitly provides an owner
+- relationshipStage: choose one concise stage label, usually "Prospect"
+- matchThreshold: integer from 0 to 100 for how selective relevance matching should be
+- notes: one short sentence of account context
+
+Do not return markdown fences. Do not repeat instructions or schema examples.`;
 
 export async function POST(request: NextRequest) {
   const auth = await requireAuthWithTokenExchange(request, "agent-api");
@@ -44,102 +53,100 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     const details = error instanceof Error ? error.message : String(error);
     console.error("[ClientEnrich] All strategies failed:", details);
-    return NextResponse.json({
-      client: buildFallbackProfile(normalizedSource),
-      fallback: true,
-      details,
-    });
+    return NextResponse.json(
+      {
+        error: "Could not enrich client profile with LLM derivation",
+        details,
+      },
+      { status: 502 },
+    );
   }
 }
 
 async function runEnrichment(token: string, source: string, userPrompt: string): Promise<ClientEnrichmentResult> {
-  const fullPrompt = `${SYSTEM_PROMPT}\n\n${userPrompt}`;
+  const errors: string[] = [];
 
-  // OpenRouter/direct LLM first tends to behave better than the generic agent on this task.
-  try {
-    const raw = await directLLM(token, userPrompt);
-    return validateResult(parseOutput(raw), source);
-  } catch (e) {
-    console.warn("[ClientEnrich] Direct LLM failed:", e instanceof Error ? e.message : String(e));
-  }
-
-  // Agent fallback
-  try {
-    const raw = await invokeAgent(token, fullPrompt);
-    return validateResult(parseOutput(raw), source);
-  } catch (e) {
-    console.warn("[ClientEnrich] Agent failed:", e instanceof Error ? e.message : String(e));
-  }
-
-  // Local model fallback
-  const raw = await localModel(token, userPrompt);
-  return validateResult(parseOutput(raw), source);
-}
-
-async function invokeAgent(token: string, prompt: string): Promise<string> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 30000);
-  try {
-    const res = await fetch(`${AGENT_API_URL}/runs/invoke`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ agent_name: CONTENT_AGENT_NAME, agent_tier: CONTENT_AGENT_TIER, input: { prompt } }),
-      signal: controller.signal,
-    });
-    if (!res.ok) throw new Error(`Agent ${res.status}`);
-    const data = await res.json();
-    if (data.status === "failed" || !data.output) throw new Error(data.error || "No output");
-    return typeof data.output === "string" ? data.output : JSON.stringify(data.output);
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-async function directLLM(token: string, userPrompt: string): Promise<string> {
-  const messages = [
-    { role: "system" as const, content: SYSTEM_PROMPT },
-    { role: "user" as const, content: userPrompt },
-  ];
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 30000);
-  try {
-    if (OPENROUTER_API_KEY) {
-      const res = await fetch(OPENROUTER_URL, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-          "Content-Type": "application/json",
-          "HTTP-Referer": "https://newsletter-digest.busibox.app",
-          "X-Title": "Newsletter Digest",
-        },
-        body: JSON.stringify({
-          model: OPENROUTER_MODEL,
-          messages,
-          temperature: 0.1,
-          max_tokens: 400,
-          response_format: { type: "json_object" },
-        }),
-        signal: controller.signal,
-      });
-      if (!res.ok) throw new Error(`OpenRouter ${res.status}`);
-      const data = await res.json();
-      return data.choices?.[0]?.message?.content || "";
+  if (ANTHROPIC_API_KEY) {
+    try {
+      const raw = await anthropicLLM(userPrompt);
+      return validateResult(parseOutput(raw), source);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      errors.push(`anthropic: ${msg}`);
+      console.warn("[ClientEnrich] Anthropic failed:", msg);
     }
-    const res = await fetch(`${AGENT_API_URL}/llm/completions`, {
+  }
+
+  // BusiBox agent-api LLM completions (try "default" model for better quality)
+  try {
+    const raw = await agentApiLLM(token, userPrompt, "default");
+    return validateResult(parseOutput(raw), source);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    errors.push(`agent-llm-default: ${msg}`);
+    console.warn("[ClientEnrich] Agent-api LLM (default) failed:", msg);
+  }
+
+  // Retry with "fast" model
+  try {
+    const raw = await agentApiLLM(token, userPrompt, "fast");
+    return validateResult(parseOutput(raw), source);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    errors.push(`agent-llm-fast: ${msg}`);
+    console.warn("[ClientEnrich] Agent-api LLM (fast) failed:", msg);
+  }
+
+  // OpenRouter as last resort (if configured and has credits)
+  if (OPENROUTER_API_KEY) {
+    try {
+      const raw = await openRouterLLM(userPrompt);
+      return validateResult(parseOutput(raw), source);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      errors.push(`openrouter: ${msg}`);
+      console.warn("[ClientEnrich] OpenRouter failed:", msg);
+    }
+  }
+
+  throw new Error(`All enrichment strategies failed: ${errors.join(" | ")}`);
+}
+
+async function anthropicLLM(userPrompt: string): Promise<string> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000);
+  try {
+    const res = await fetch(ANTHROPIC_URL, {
       method: "POST",
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ model: process.env.NEWSLETTER_LLM_MODEL || "fast", messages, temperature: 0.1, max_tokens: 400 }),
+      headers: {
+        "x-api-key": ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: ANTHROPIC_MODEL,
+        max_tokens: 400,
+        temperature: 0.1,
+        system: `${SYSTEM_PROMPT}\n\nReturn only valid JSON.`,
+        messages: [{ role: "user", content: userPrompt }],
+      }),
       signal: controller.signal,
     });
-    if (!res.ok) throw new Error(`LLM ${res.status}`);
+    if (!res.ok) throw new Error(`Anthropic ${res.status}`);
     const data = await res.json();
-    return data.content || "";
+    const text = Array.isArray(data.content)
+      ? data.content
+          .filter((part: { type?: string; text?: string }) => part?.type === "text" && typeof part.text === "string")
+          .map((part: { text: string }) => part.text)
+          .join("\n")
+      : "";
+    return text;
   } finally {
     clearTimeout(timeout);
   }
 }
 
-async function localModel(token: string, userPrompt: string): Promise<string> {
+async function agentApiLLM(token: string, userPrompt: string, model = "default"): Promise<string> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30000);
   try {
@@ -147,7 +154,7 @@ async function localModel(token: string, userPrompt: string): Promise<string> {
       method: "POST",
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: process.env.NEWSLETTER_LLM_MODEL || "fast",
+        model,
         messages: [
           { role: "system", content: SYSTEM_PROMPT },
           { role: "user", content: userPrompt },
@@ -157,9 +164,41 @@ async function localModel(token: string, userPrompt: string): Promise<string> {
       }),
       signal: controller.signal,
     });
-    if (!res.ok) throw new Error(`Local model ${res.status}`);
+    if (!res.ok) throw new Error(`Agent-api LLM ${res.status}`);
     const data = await res.json();
     return data.content || "";
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function openRouterLLM(userPrompt: string): Promise<string> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000);
+  try {
+    const res = await fetch(OPENROUTER_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://newsletter-digest.busibox.app",
+        "X-Title": "Newsletter Digest",
+      },
+      body: JSON.stringify({
+        model: OPENROUTER_MODEL,
+        messages: [
+          { role: "system", content: SYSTEM_PROMPT },
+          { role: "user", content: userPrompt },
+        ],
+        temperature: 0.1,
+        max_tokens: 400,
+        response_format: { type: "json_object" },
+      }),
+      signal: controller.signal,
+    });
+    if (!res.ok) throw new Error(`OpenRouter ${res.status}`);
+    const data = await res.json();
+    return data.choices?.[0]?.message?.content || "";
   } finally {
     clearTimeout(timeout);
   }
@@ -242,103 +281,6 @@ function validateResult(result: ClientEnrichmentResult, source: string): ClientE
   return result;
 }
 
-function buildFallbackProfile(source: string): ClientEnrichmentResult {
-  const normalized = source.trim();
-  const lowered = normalized.toLowerCase();
-  const domainHost = extractHostname(lowered);
-  const companyName = prettifyCompanyName(normalized, domainHost);
-
-  const profiles = [
-    {
-      keywords: ["goldman", "morgan", "capital", "bank", "asset", "wealth", "finance", "fintech"],
-      sector: "Financial services",
-      topics: ["capital markets", "risk and compliance", "wealth management", "AI operations"],
-      priorities: "Improve client-facing productivity, strengthen governance, and modernize high-value workflows without increasing risk.",
-      threshold: 58,
-      notes: "Financial institution likely balancing AI adoption with regulatory and operational controls.",
-    },
-    {
-      keywords: ["clinic", "health", "hospital", "pharma", "biotech", "medical", "med"],
-      sector: "Healthcare",
-      topics: ["clinical operations", "compliance and privacy", "care workflow automation", "AI decision support"],
-      priorities: "Improve operational efficiency, support regulated AI adoption, and reduce friction in high-volume care workflows.",
-      threshold: 56,
-      notes: "Healthcare organization likely focused on operational resilience, safety, and compliant automation.",
-    },
-    {
-      keywords: ["openai", "anthropic", "ai", "software", "cloud", "developer", "platform", "tech"],
-      sector: "Technology",
-      topics: ["AI product strategy", "enterprise adoption", "developer platforms", "go-to-market execution"],
-      priorities: "Accelerate product adoption, sharpen enterprise positioning, and convert fast-moving AI shifts into revenue opportunities.",
-      threshold: 52,
-      notes: "Technology company likely sensitive to model launches, enterprise demand, and competitive platform moves.",
-    },
-    {
-      keywords: ["retail", "commerce", "consumer", "brand", "shop"],
-      sector: "Retail and consumer",
-      topics: ["customer experience", "pricing and margin", "marketing operations", "supply chain visibility"],
-      priorities: "Protect margin, improve customer experience, and automate repetitive commercial and operational workflows.",
-      threshold: 48,
-      notes: "Consumer business likely focused on demand signals, operational efficiency, and competitive positioning.",
-    },
-    {
-      keywords: ["logistics", "shipping", "freight", "supply", "warehouse", "transport"],
-      sector: "Logistics and supply chain",
-      topics: ["route optimization", "supply chain resilience", "workflow automation", "vendor risk"],
-      priorities: "Increase operating efficiency, improve network visibility, and reduce disruption across supply chain workflows.",
-      threshold: 50,
-      notes: "Operations-heavy business likely prioritizing efficiency, resilience, and coordination across distributed teams.",
-    },
-  ];
-
-  const matched = profiles.find((profile) => profile.keywords.some((keyword) => lowered.includes(keyword) || domainHost.includes(keyword)));
-
-  const fallback = matched ?? {
-    sector: "Enterprise services",
-    topics: ["AI adoption", "workflow automation", "governance", "competitive monitoring"],
-    priorities: "Track material AI, operational, and market developments that could affect this account.",
-    threshold: 42,
-    notes: "General enterprise profile generated from company name because live enrichment providers were unavailable.",
-  };
-
-  return {
-    name: companyName,
-    sector: fallback.sector,
-    topics: fallback.topics,
-    priorities: fallback.priorities,
-    accountOwner: "Unassigned",
-    relationshipStage: "Prospect",
-    matchThreshold: fallback.threshold,
-    notes: fallback.notes,
-  };
-}
-
-function extractHostname(value: string): string {
-  try {
-    if (value.startsWith("http://") || value.startsWith("https://")) {
-      return new URL(value).hostname.toLowerCase();
-    }
-  } catch {
-    return "";
-  }
-  return value;
-}
-
-function prettifyCompanyName(source: string, domainHost: string): string {
-  if (!domainHost || domainHost === source.toLowerCase()) {
-    return source.trim();
-  }
-
-  const stripped = domainHost
-    .replace(/^www\./, "")
-    .split(".")[0]
-    .replace(/[-_]+/g, " ")
-    .trim();
-
-  if (!stripped) return source.trim();
-  return stripped.replace(/\b\w/g, (char) => char.toUpperCase());
-}
-
 function normalizeRelationshipStage(value: unknown): string {
   if (typeof value !== "string") return "Prospect";
   const trimmed = value.trim();
@@ -346,11 +288,8 @@ function normalizeRelationshipStage(value: unknown): string {
 }
 
 function normalizePriorities(value: unknown): string {
-  if (typeof value !== "string") {
-    return "Track material AI, operational, and market developments that could affect this account.";
-  }
-  const trimmed = value.trim();
-  return trimmed || "Track material AI, operational, and market developments that could affect this account.";
+  if (typeof value !== "string") return "";
+  return value.trim();
 }
 
 function normalizeAccountOwner(value: unknown): string {

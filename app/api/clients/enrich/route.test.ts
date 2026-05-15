@@ -14,7 +14,44 @@ import { POST } from "./route";
 describe("client enrich route", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.unstubAllEnvs();
     mocks.requireAuthWithTokenExchange.mockResolvedValue({ apiToken: "agent-token" });
+  });
+
+  it("prefers Anthropic when ANTHROPIC_API_KEY is present", async () => {
+    vi.resetModules();
+    vi.stubEnv("ANTHROPIC_API_KEY", "anthropic-test-key");
+    vi.stubEnv("ANTHROPIC_MODEL", "claude-test-model");
+
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          content: [
+            {
+              type: "text",
+              text: "{\"name\":\"OpenAI\",\"sector\":\"Technology\",\"topics\":[\"AI agents\",\"enterprise adoption\",\"developer platforms\"],\"priorities\":\"Expand enterprise adoption and strengthen platform positioning.\",\"accountOwner\":\"Unassigned\",\"relationshipStage\":\"Prospect\",\"matchThreshold\":52,\"notes\":\"AI platform company tracking model launches and enterprise demand.\"}",
+            },
+          ],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+
+    const { POST: anthropicPost } = await import("./route");
+    const response = await anthropicPost(
+      new NextRequest("http://localhost:3002/api/clients/enrich", {
+        method: "POST",
+        body: JSON.stringify({ source: "OpenAI" }),
+      }),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://api.anthropic.com/v1/messages");
+    expect(body.client.name).toBe("OpenAI");
+
+    fetchMock.mockRestore();
+    vi.unstubAllEnvs();
   });
 
   it("returns a fully populated client profile shape", async () => {
@@ -74,16 +111,14 @@ describe("client enrich route", () => {
     );
     const body = await response.json();
 
-    expect(response.status).toBe(200);
-    expect(body.client.priorities).toContain("Track material AI");
-    expect(body.client.accountOwner).toBe("Unassigned");
-    expect(body.client.relationshipStage).toBe("Prospect");
-    expect(body.client.matchThreshold).toBe(42);
+    expect(response.status).toBe(502);
+    expect(body.error).toBe("Could not enrich client profile with LLM derivation");
+    expect(body.details).toContain("All enrichment strategies failed");
 
     fetchMock.mockRestore();
   });
 
-  it("falls back to a deterministic company profile when providers fail", async () => {
+  it("returns 502 when all providers fail", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("provider unavailable"));
 
     const response = await POST(
@@ -94,18 +129,9 @@ describe("client enrich route", () => {
     );
     const body = await response.json();
 
-    expect(response.status).toBe(200);
-    expect(body.fallback).toBe(true);
-    expect(body.client).toEqual(
-      expect.objectContaining({
-        name: "Mayo Clinic",
-        sector: "Healthcare",
-        accountOwner: "Unassigned",
-        relationshipStage: "Prospect",
-      }),
-    );
-    expect(body.client.topics).toContain("clinical operations");
-    expect(body.client.matchThreshold).toBeGreaterThanOrEqual(0);
+    expect(response.status).toBe(502);
+    expect(body.error).toBe("Could not enrich client profile with LLM derivation");
+    expect(body.details).toContain("provider unavailable");
 
     fetchMock.mockRestore();
   });

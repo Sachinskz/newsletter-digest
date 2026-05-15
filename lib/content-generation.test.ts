@@ -36,7 +36,7 @@ describe("content generation helpers", () => {
       },
     });
 
-    expect(prompt).toContain("Client email");
+    expect(prompt).toContain("client email");
     expect(prompt).toContain("For client:");
     expect(prompt).toContain("Meridian Capital");
   });

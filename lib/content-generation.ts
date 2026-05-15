@@ -2,8 +2,11 @@ import type { ClientProfile, LibraryArticle } from "./editorial-intelligence";
 import type { ContentKind, ContentTone, GeneratedContentOutput } from "./types";
 
 const AGENT_API_URL = process.env.AGENT_API_URL || "http://localhost:8000";
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || "";
+const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6";
+const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || "";
-const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || "openai/gpt-4o-mini";
+const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || "anthropic/claude-sonnet-4";
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 const CONTENT_AGENT_NAME = process.env.CONTENT_GENERATOR_AGENT_NAME || "content-generator";
 const CONTENT_AGENT_TIER = process.env.CONTENT_GENERATOR_AGENT_TIER || "complex";
@@ -67,16 +70,18 @@ export function buildContentPrompt({
     ? `\nFor client: ${client.name} (${client.sector})\nWhat they care about: ${client.priorities}\nTopics they track: ${client.topics.join(", ")}`
     : "";
 
+  const kindInstruction = getKindInstruction(kind);
+
   if (articles.length === 1) {
     const article = articles[0];
-    return `Write a ${getContentKindLabel(kind)} in a ${tone} tone from this article.${clientContext}
+    return `${kindInstruction} Tone: ${tone}.${clientContext}
 
 Article: ${article.title}
 Source: ${article.source}
 Summary: ${article.summary}
 Why it matters: ${article.why}
 ${article.companies.length ? `Companies mentioned: ${article.companies.join(", ")}` : ""}
-${article.topics.length ? `Topics: ${article.topics.join(", ")}` : ""}`;
+${article.topics.length ? `Topics: ${article.topics.join(", ")}` : ""}`.trim();
   }
 
   const articleBlocks = articles
@@ -136,8 +141,8 @@ export function parseGeneratedContentOutput(value: unknown): GeneratedContentOut
  * - JSON appearing anywhere in the output (before or after extra text)
  */
 function extractJsonFromLLM(raw: string): unknown {
-  // Strip think tags
-  const deThought = raw.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+  // Strip all forms of thinking output
+  const deThought = stripThinking(raw);
 
   // Strip a single outer code fence if the whole string is wrapped
   const withoutFence = deThought
@@ -213,21 +218,22 @@ export async function requestContentGeneration(
   const TIMEOUT_MS = 120000;
   const prompt = buildContentPrompt(params);
 
-  console.log("[ContentGeneration] Using BusiBox agent:", CONTENT_AGENT_NAME, "tier:", CONTENT_AGENT_TIER);
-
-  // Agent-first: BusiBox content-generator (Claude Sonnet) → OpenRouter → local model
-  try {
-    return await invokeContentGeneratorAgent(agentApiToken, prompt, TIMEOUT_MS);
-  } catch (agentError) {
-    console.warn("[ContentGeneration] Agent invocation failed, trying direct LLM:",
-      agentError instanceof Error ? agentError.message : String(agentError));
-  }
-
+  // Anthropic/OpenRouter/agent-api direct completions first. Fall back to the
+  // BusiBox content agent only if the more controllable structured path fails.
   try {
     return await directLLMGenerate(agentApiToken, params, TIMEOUT_MS);
   } catch (llmError) {
-    console.warn("[ContentGeneration] Direct LLM failed, trying local model fallback:",
+    console.warn("[ContentGeneration] Direct LLM failed, trying BusiBox content agent:",
       llmError instanceof Error ? llmError.message : String(llmError));
+  }
+
+  try {
+    console.log("[ContentGeneration] Using BusiBox agent:", CONTENT_AGENT_NAME, "tier:", CONTENT_AGENT_TIER);
+    const agentPrompt = `Return ONLY a JSON object with these four fields — no markdown, no extra text:\n{"title":"...","subject":"...","body":"...","notes":"..."}\n\nwhere title is a short label, subject is the email subject (empty for non-email), body is the FULL written content, and notes is one editorial note.\n\n${prompt}`;
+    return await invokeContentGeneratorAgent(agentApiToken, agentPrompt, TIMEOUT_MS);
+  } catch (agentError) {
+    console.warn("[ContentGeneration] Agent invocation failed, trying local model fallback:",
+      agentError instanceof Error ? agentError.message : String(agentError));
   }
 
   // Last resort: local model via agent-api completions (no OpenRouter)
@@ -291,8 +297,11 @@ async function directLLMGenerate(
   const messages = [
     {
       role: "system" as const,
-      content: `You write business content that sounds like a smart, well-read person wrote it — not an AI. Be specific, use the article's actual facts and figures, and skip hollow phrases. Return ONLY a JSON object (no markdown fences, no extra text):
-{"title":"short internal label","subject":"email subject or empty string","body":"the finished draft","notes":"one honest editorial note"}`,
+      content: `You write business content that sounds like a smart, well-read person wrote it — not an AI. Be specific, use the article's actual facts and figures, and skip hollow phrases.
+
+IMPORTANT: Do NOT include any thinking, analysis, or step-by-step reasoning. Output ONLY the JSON object.
+
+Return a JSON object with fields: title (short label), subject (email subject or empty string), body (the FULL written content — this is the main output), notes (one editorial note). No markdown fences.`,
     },
     {
       role: "user" as const,
@@ -304,32 +313,47 @@ async function directLLMGenerate(
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    let raw: string;
+    let raw: string | null = null;
+
+    if (ANTHROPIC_API_KEY) {
+      try {
+        raw = await anthropicGenerate(messages, controller.signal);
+      } catch (e) {
+        console.warn("[ContentGeneration] Anthropic failed, falling through:",
+          e instanceof Error ? e.message : String(e));
+      }
+    }
 
     if (OPENROUTER_API_KEY) {
-      const res = await fetch(OPENROUTER_URL, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-          "Content-Type": "application/json",
-          "HTTP-Referer": "https://newsletter-digest.busibox.app",
-          "X-Title": "Newsletter Digest",
-        },
-        body: JSON.stringify({
-          model: OPENROUTER_MODEL,
-          messages,
-          temperature: 0.3,
-          max_tokens: 2000,
-        }),
-        signal: controller.signal,
-      });
-      if (!res.ok) {
-        const errorBody = await res.text().catch(() => "no body");
-        throw new Error(`OpenRouter failed (${res.status}): ${errorBody.slice(0, 300)}`);
+      try {
+        const res = await fetch(OPENROUTER_URL, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://newsletter-digest.busibox.app",
+            "X-Title": "Newsletter Digest",
+          },
+          body: JSON.stringify({
+            model: OPENROUTER_MODEL,
+            messages,
+            temperature: 0.3,
+            max_tokens: 4096,
+          }),
+          signal: controller.signal,
+        });
+        if (res.ok) {
+          const data = await res.json();
+          raw = stripThinking(data.choices?.[0]?.message?.content || "");
+        } else {
+          console.warn("[ContentGeneration] OpenRouter failed, falling through to agent-api:", res.status);
+        }
+      } catch (e) {
+        console.warn("[ContentGeneration] OpenRouter error, falling through to agent-api:", e instanceof Error ? e.message : String(e));
       }
-      const data = await res.json();
-      raw = stripThinking(data.choices?.[0]?.message?.content || "");
-    } else {
+    }
+
+    if (!raw) {
       const res = await fetch(`${AGENT_API_URL}/llm/completions`, {
         method: "POST",
         headers: {
@@ -340,7 +364,7 @@ async function directLLMGenerate(
           model: process.env.NEWSLETTER_LLM_MODEL || "fast",
           messages,
           temperature: 0.3,
-          max_tokens: 2000,
+          max_tokens: 4096,
         }),
         signal: controller.signal,
       });
@@ -364,6 +388,49 @@ async function directLLMGenerate(
   }
 }
 
+async function anthropicGenerate(
+  messages: Array<{ role: "system" | "user"; content: string }>,
+  signal: AbortSignal,
+): Promise<string> {
+  const systemPrompt = messages.find((message) => message.role === "system")?.content || "";
+  const userPrompt = messages
+    .filter((message) => message.role === "user")
+    .map((message) => message.content)
+    .join("\n\n");
+
+  const res = await fetch(ANTHROPIC_URL, {
+    method: "POST",
+    headers: {
+      "x-api-key": ANTHROPIC_API_KEY,
+      "anthropic-version": "2023-06-01",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      model: ANTHROPIC_MODEL,
+      max_tokens: 4096,
+      temperature: 0.3,
+      system: systemPrompt,
+      messages: [{ role: "user", content: userPrompt }],
+    }),
+    signal,
+  });
+
+  if (!res.ok) {
+    const errorBody = await res.text().catch(() => "no body");
+    throw new Error(`Anthropic ${res.status}: ${errorBody.slice(0, 300)}`);
+  }
+
+  const data = await res.json();
+  const text = Array.isArray(data.content)
+    ? data.content
+        .filter((part: { type?: string; text?: string }) => part?.type === "text" && typeof part.text === "string")
+        .map((part: { text: string }) => part.text)
+        .join("\n")
+    : "";
+
+  return stripThinking(text);
+}
+
 async function localModelFallback(
   agentApiToken: string,
   prompt: string,
@@ -385,13 +452,12 @@ async function localModelFallback(
         messages: [
           {
             role: "system",
-            content: `You write business content. Return ONLY a JSON object — no markdown fences, no extra text:
-{"title":"short internal label","subject":"email subject or empty string","body":"the finished draft","notes":"one sentence of editorial feedback"}`,
+            content: `You write business content. Do NOT include any thinking or reasoning — output ONLY a JSON object with fields: title (short label), subject (email subject or empty string), body (the FULL written content), notes (one editorial note). No markdown fences.`,
           },
           { role: "user", content: prompt },
         ],
         temperature: 0.4,
-        max_tokens: 1500,
+        max_tokens: 4096,
       }),
       signal: controller.signal,
     });
@@ -414,13 +480,28 @@ async function localModelFallback(
   }
 }
 
-/** Strip Qwen-style <think>...</think> reasoning from output */
 function stripThinking(content: string): string {
-  const thinkEnd = content.indexOf("</think>");
-  if (thinkEnd !== -1) {
-    return content.slice(thinkEnd + 8).trim();
+  let text = content;
+
+  // Strip <think>...</think> and <thinking>...</thinking> (Qwen/DeepSeek)
+  const thinkEndTag = text.match(/<\/think(?:ing)?>/i);
+  if (thinkEndTag && thinkEndTag.index !== undefined) {
+    text = text.slice(thinkEndTag.index + thinkEndTag[0].length);
+  } else {
+    text = text.replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/gi, "");
   }
-  return content.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
+
+  // Strip plain-text "Thinking Process:" / "**Thinking" preambles.
+  // These have no end marker, so find the first `{` that starts valid JSON.
+  const stripped = text.trim();
+  if (/^(?:\*{0,2}thinking|step\s*1[:.)])/i.test(stripped)) {
+    const braceIdx = stripped.indexOf("{");
+    if (braceIdx > 0) {
+      text = stripped.slice(braceIdx);
+    }
+  }
+
+  return text.trim();
 }
 
 // ---------------------------------------------------------------------------
