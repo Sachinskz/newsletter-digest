@@ -5,6 +5,8 @@ const AGENT_API_URL = process.env.AGENT_API_URL || "http://localhost:8000";
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || "";
 const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || "openai/gpt-4o-mini";
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
+const CONTENT_AGENT_NAME = process.env.CONTENT_GENERATOR_AGENT_NAME || "content-generator";
+const CONTENT_AGENT_TIER = process.env.CONTENT_GENERATOR_AGENT_TIER || "complex";
 
 export const CONTENT_KINDS: Array<{
   id: ContentKind;
@@ -152,7 +154,74 @@ export async function requestContentGeneration(
   params: { article: LibraryArticle; kind: ContentKind; tone: ContentTone; client?: ClientProfile | null },
 ): Promise<GeneratedContentOutput> {
   const TIMEOUT_MS = 120000;
+  const prompt = buildContentPrompt(params);
 
+  console.log("[ContentGeneration] Using BusiBox agent:", CONTENT_AGENT_NAME, "tier:", CONTENT_AGENT_TIER);
+
+  // Agent-first: BusiBox content-generator (Claude Sonnet) → OpenRouter fallback
+  try {
+    return await invokeContentGeneratorAgent(agentApiToken, prompt, TIMEOUT_MS);
+  } catch (agentError) {
+    console.warn("[ContentGeneration] Agent invocation failed, falling back to OpenRouter:",
+      agentError instanceof Error ? agentError.message : String(agentError));
+    return await directLLMGenerate(agentApiToken, params, TIMEOUT_MS);
+  }
+}
+
+async function invokeContentGeneratorAgent(
+  token: string,
+  prompt: string,
+  timeoutMs: number,
+): Promise<GeneratedContentOutput> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const res = await fetch(`${AGENT_API_URL}/runs/invoke`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        agent_name: CONTENT_AGENT_NAME,
+        agent_tier: CONTENT_AGENT_TIER,
+        input: { prompt },
+      }),
+      signal: controller.signal,
+    });
+
+    if (!res.ok) {
+      const errorBody = await res.text().catch(() => "no body");
+      throw new Error(`Agent invocation failed (${res.status}): ${errorBody.slice(0, 300)}`);
+    }
+
+    const data = await res.json();
+    console.log("[ContentGeneration] Agent response status:", data.status);
+
+    if (data.status === "failed" || data.error) {
+      throw new Error(`Agent run failed: ${data.error || "unknown error"}`);
+    }
+    if (!data.output) {
+      throw new Error("Agent returned no output");
+    }
+
+    return parseGeneratedContentOutput(data.output);
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error(`Agent invocation timed out after ${timeoutMs}ms`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function directLLMGenerate(
+  agentApiToken: string,
+  params: { article: LibraryArticle; kind: ContentKind; tone: ContentTone; client?: ClientProfile | null },
+  timeoutMs: number,
+): Promise<GeneratedContentOutput> {
   const messages = [
     {
       role: "system" as const,
@@ -166,13 +235,12 @@ export async function requestContentGeneration(
   ];
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     let raw: string;
 
     if (OPENROUTER_API_KEY) {
-      // Use OpenRouter directly
       const res = await fetch(OPENROUTER_URL, {
         method: "POST",
         headers: {
@@ -196,7 +264,6 @@ export async function requestContentGeneration(
       const data = await res.json();
       raw = stripThinking(data.choices?.[0]?.message?.content || "");
     } else {
-      // Fallback to agent-api
       const res = await fetch(`${AGENT_API_URL}/llm/completions`, {
         method: "POST",
         headers: {
@@ -219,11 +286,11 @@ export async function requestContentGeneration(
       raw = stripThinking(data.content || "");
     }
 
-    console.log("[ContentGeneration] Raw output length:", raw.length);
+    console.log("[ContentGeneration] Direct LLM output length:", raw.length);
     return parseGeneratedContentOutput(raw);
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
-      throw new Error(`Content generation timed out after ${TIMEOUT_MS}ms`);
+      throw new Error(`Content generation timed out after ${timeoutMs}ms`);
     }
     throw error;
   } finally {
