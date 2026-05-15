@@ -184,12 +184,25 @@ export default function ClientsPage() {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || "Could not enrich client profile");
 
-      const client = data.client as { name: string; sector: string; topics: string[]; notes: string };
+      const client = data.client as {
+        name: string;
+        sector: string;
+        topics: string[];
+        priorities: string;
+        accountOwner?: string;
+        relationshipStage: string;
+        matchThreshold: number;
+        notes: string;
+      };
       setForm((current) => ({
         ...current,
         name: client.name || current.name,
         sector: client.sector || current.sector,
         topics: client.topics?.join(", ") || current.topics,
+        priorities: client.priorities || current.priorities,
+        accountOwner: client.accountOwner || current.accountOwner,
+        relationshipStage: client.relationshipStage || current.relationshipStage,
+        matchThreshold: String(client.matchThreshold ?? current.matchThreshold),
         notes: client.notes || current.notes,
       }));
       setEnrichSource("");
@@ -342,7 +355,7 @@ export default function ClientsPage() {
           <div className="mb-4 rounded-xl border border-white/8 bg-white/[0.03] p-3">
             <div className="mb-2 flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-white/45">
               <Sparkles size={11} />
-              Auto-fill name, sector, topics &amp; notes
+              Auto-fill the full client profile
             </div>
             <div className="flex gap-2">
               <input
@@ -350,7 +363,7 @@ export default function ClientsPage() {
                 value={enrichSource}
                 onChange={(event) => setEnrichSource(event.target.value)}
                 onKeyDown={(event) => { if (event.key === "Enter") void enrichClient(); }}
-                placeholder="e.g. Goldman Sachs or https://acme.com"
+                placeholder="e.g. Goldman Sachs, OpenAI, or https://acme.com"
                 disabled={enriching}
               />
               <button
