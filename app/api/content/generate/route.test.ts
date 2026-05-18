@@ -84,8 +84,9 @@ describe("content generate route", () => {
     );
 
     expect(response.status).toBe(200);
-    // First call is the agent (runs/invoke); second call is LLM completions fallback.
-    const llmBody = JSON.parse(fetchMock.mock.calls[1]?.[1]?.body as string);
+    // directLLMGenerate runs first now — with no ANTHROPIC_API_KEY the first fetch
+    // goes to agent-api /llm/completions.
+    const llmBody = JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string);
     expect(llmBody.messages[1].content).toContain("LinkedIn post");
     expect(mocks.createGeneratedContent).toHaveBeenCalledWith("data-token", "generated-doc", expect.objectContaining({
       articleId: "article-1",

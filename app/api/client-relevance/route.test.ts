@@ -3,7 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   requireAuthWithTokenExchange: vi.fn(),
-  buildClientMatches: vi.fn(),
+  buildClientMatchesWithAgent: vi.fn(),
+  deriveLibraryArticles: vi.fn(),
   ensureDataDocuments: vi.fn(),
   listClientMatches: vi.fn(),
   listClientProfiles: vi.fn(),
@@ -16,8 +17,12 @@ vi.mock("@/lib/auth-middleware", () => ({
   requireAuthWithTokenExchange: mocks.requireAuthWithTokenExchange,
 }));
 
-vi.mock("@/lib/client-relevance", () => ({
-  buildClientMatches: mocks.buildClientMatches,
+vi.mock("@/lib/client-relevance-agent", () => ({
+  buildClientMatchesWithAgent: mocks.buildClientMatchesWithAgent,
+}));
+
+vi.mock("@/lib/editorial-intelligence", () => ({
+  deriveLibraryArticles: mocks.deriveLibraryArticles,
 }));
 
 vi.mock("@/lib/data-api-client", () => ({
@@ -46,6 +51,7 @@ describe("client relevance route", () => {
     ];
 
     mocks.requireAuthWithTokenExchange.mockResolvedValue({ apiToken: "token" });
+    mocks.deriveLibraryArticles.mockReturnValue([]);
     mocks.ensureDataDocuments.mockResolvedValue({
       clients: "clients-doc",
       emails: "emails-doc",
@@ -55,7 +61,7 @@ describe("client relevance route", () => {
     mocks.listClientProfiles.mockResolvedValue(clients);
     mocks.listEmails.mockResolvedValue([{ id: "email-1" }]);
     mocks.listSummaries.mockResolvedValue([{ id: "summary-1" }]);
-    mocks.buildClientMatches.mockReturnValue({
+    mocks.buildClientMatchesWithAgent.mockResolvedValue({
       articleCount: 3,
       matches: [
         {
@@ -79,6 +85,7 @@ describe("client relevance route", () => {
           matchedAt: "2026-05-14T09:30:00.000Z",
         },
       ],
+      source: "deterministic",
     });
     mocks.listClientMatches.mockResolvedValue([
       {
@@ -128,6 +135,7 @@ describe("client relevance route", () => {
       clientCrudRoutes: "ready",
       matchPersistence: "ready",
       refreshMode: "on_read",
+      scoringSource: "deterministic",
     });
     expect(body.stats).toEqual({
       articleCount: 3,

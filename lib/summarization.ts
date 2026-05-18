@@ -46,6 +46,9 @@ export function getSummaryFormatOption(format: SummaryFormat = DEFAULT_SUMMARY_F
 // Config
 // ---------------------------------------------------------------------------
 
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || "";
+const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6";
+const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || "";
 const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || "openai/gpt-4o-mini";
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
@@ -78,11 +81,60 @@ async function llmComplete(
   messages: LLMMessage[],
   opts: { model?: string; temperature?: number; maxTokens?: number; timeoutMs?: number } = {},
 ): Promise<string> {
-  // Use OpenRouter if key is available, otherwise fall back to agent-api
+  // Priority: Anthropic Claude → OpenRouter → agent-api local model
+  if (ANTHROPIC_API_KEY) {
+    return llmCompleteAnthropic(messages, opts);
+  }
   if (OPENROUTER_API_KEY) {
     return llmCompleteOpenRouter(messages, opts);
   }
   return llmCompleteAgentApi(token, messages, opts);
+}
+
+async function llmCompleteAnthropic(
+  messages: LLMMessage[],
+  opts: { model?: string; temperature?: number; maxTokens?: number; timeoutMs?: number } = {},
+): Promise<string> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? SUMMARY_TIMEOUT_MS);
+
+  const systemMsg = messages.find((m) => m.role === "system");
+  const nonSystemMessages = messages.filter((m) => m.role !== "system");
+
+  try {
+    const res = await fetch(ANTHROPIC_URL, {
+      method: "POST",
+      headers: {
+        "x-api-key": ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: ANTHROPIC_MODEL,
+        max_tokens: opts.maxTokens ?? 2000,
+        temperature: opts.temperature ?? 0.2,
+        ...(systemMsg ? { system: systemMsg.content } : {}),
+        messages: nonSystemMessages.map((m) => ({ role: m.role, content: m.content })),
+      }),
+      signal: controller.signal,
+    });
+
+    if (!res.ok) {
+      const errorBody = await res.text().catch(() => "no body");
+      throw new Error(`Anthropic failed (${res.status}): ${errorBody.slice(0, 300)}`);
+    }
+
+    const data = await res.json();
+    const textBlock = data.content?.find((b: { type: string }) => b.type === "text");
+    return stripThinking(textBlock?.text || "");
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error(`Anthropic request timed out after ${opts.timeoutMs ?? SUMMARY_TIMEOUT_MS}ms`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function llmCompleteOpenRouter(
