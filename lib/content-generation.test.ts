@@ -81,4 +81,17 @@ describe("content generation helpers", () => {
       notes: "Add one concrete statistic before publishing.",
     });
   });
+
+  it("accepts thinking preambles before JSON-ish content", () => {
+    expect(
+      parseGeneratedContentOutput(
+        'Thinking Process: 1. **Analyze the Request:** write a LinkedIn post. Final answer: title":"Career Change LinkedIn Post","subject":"","body":"The most interesting thing is the career pivot signal.","notes":"Add one concrete statistic before publishing."}',
+      ),
+    ).toEqual({
+      title: "Career Change LinkedIn Post",
+      subject: "",
+      body: "The most interesting thing is the career pivot signal.",
+      notes: "Add one concrete statistic before publishing.",
+    });
+  });
 });

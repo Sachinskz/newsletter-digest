@@ -108,9 +108,10 @@ ${articleBlocks}`;
 export function parseGeneratedContentOutput(value: unknown): GeneratedContentOutput {
   let normalized: unknown = value;
 
-  // If it's a string, extract JSON from it
+  // If it's a string, normalize it through the same robust wrapper repair path
+  // used for agent output objects.
   if (typeof value === "string") {
-    normalized = extractJsonFromLLM(value);
+    normalized = normalizeContentOutput(value);
   } else {
     normalized = normalizeContentOutput(value);
   }
@@ -218,25 +219,24 @@ export async function requestContentGeneration(
   const TIMEOUT_MS = 120000;
   const prompt = buildContentPrompt(params);
 
-  // Anthropic/OpenRouter/agent-api direct completions first. Fall back to the
-  // BusiBox content agent only if the more controllable structured path fails.
-  try {
-    return await directLLMGenerate(agentApiToken, params, TIMEOUT_MS);
-  } catch (llmError) {
-    console.warn("[ContentGeneration] Direct LLM failed, trying BusiBox content agent:",
-      llmError instanceof Error ? llmError.message : String(llmError));
-  }
-
+  // Prefer the registered BusiBox agent first. In production the model is
+  // configured in the Busibox portal, while app-level LLM env vars may be empty.
   try {
     console.log("[ContentGeneration] Using BusiBox agent:", CONTENT_AGENT_NAME, "tier:", CONTENT_AGENT_TIER);
     const agentPrompt = `Return ONLY a JSON object with these four fields — no markdown, no extra text:\n{"title":"...","subject":"...","body":"...","notes":"..."}\n\nwhere title is a short label, subject is the email subject (empty for non-email), body is the FULL written content, and notes is one editorial note.\n\n${prompt}`;
     return await invokeContentGeneratorAgent(agentApiToken, agentPrompt, TIMEOUT_MS);
   } catch (agentError) {
-    console.warn("[ContentGeneration] Agent invocation failed, trying local model fallback:",
+    console.warn("[ContentGeneration] Agent invocation failed, trying direct LLM fallback:",
       agentError instanceof Error ? agentError.message : String(agentError));
   }
 
-  // Last resort: local model via agent-api completions (no OpenRouter)
+  try {
+    return await directLLMGenerate(agentApiToken, params, TIMEOUT_MS);
+  } catch (llmError) {
+    console.warn("[ContentGeneration] Direct LLM failed, trying local model fallback:",
+      llmError instanceof Error ? llmError.message : String(llmError));
+  }
+
   return await localModelFallback(agentApiToken, prompt, TIMEOUT_MS);
 }
 
@@ -533,12 +533,14 @@ function normalizeContentOutput(value: unknown): unknown {
         try { return normalizeContentOutput(JSON.parse(repairJsonString(candidates[ci]))); } catch { /* continue */ }
       }
 
-      // LLM sometimes returns JSON without outer braces: "key": "value", ...
+      // LLM sometimes returns prose/thinking followed by JSON-ish fields.
       const cleaned = withoutFence.trim();
+      const jsonishStart = findJsonishObjectStart(cleaned);
+      const jsonish = jsonishStart > 0 ? cleaned.slice(jsonishStart).trim() : cleaned;
 
       // Strategy 1: agent runner omitted only the opening brace.
-      if (cleaned.startsWith('"') && !cleaned.startsWith("{") && cleaned.endsWith("}")) {
-        const wrapped = `{${cleaned}`;
+      if (jsonish.startsWith('"') && !jsonish.startsWith("{") && jsonish.endsWith("}")) {
+        const wrapped = `{${jsonish}`;
         try {
           return normalizeContentOutput(JSON.parse(wrapped));
         } catch {
@@ -549,8 +551,8 @@ function normalizeContentOutput(value: unknown): unknown {
 
       // Strategy 2: agent runner omitted the opening brace and the first quote.
       // Example: title":"...","subject":"",...}
-      if (/^[A-Za-z_][\w-]*":/.test(cleaned) && cleaned.endsWith("}")) {
-        const wrapped = `{"${cleaned}`;
+      if (/^[A-Za-z_][\w-]*":/.test(jsonish) && jsonish.endsWith("}")) {
+        const wrapped = `{"${jsonish}`;
         try {
           return normalizeContentOutput(JSON.parse(wrapped));
         } catch {
@@ -560,8 +562,8 @@ function normalizeContentOutput(value: unknown): unknown {
       }
 
       // Strategy 3: agent runner omitted only the closing brace.
-      if (cleaned.startsWith("{") && !cleaned.endsWith("}")) {
-        const wrapped = `${cleaned}}`;
+      if (jsonish.startsWith("{") && !jsonish.endsWith("}")) {
+        const wrapped = `${jsonish}}`;
         try {
           return normalizeContentOutput(JSON.parse(wrapped));
         } catch {
@@ -571,8 +573,8 @@ function normalizeContentOutput(value: unknown): unknown {
       }
 
       // Strategy 4: wrap in braces if it looks like key-value pairs.
-      if (cleaned.startsWith('"') && !cleaned.startsWith("{")) {
-        const wrapped = `{${cleaned}}`;
+      if (jsonish.startsWith('"') && !jsonish.startsWith("{")) {
+        const wrapped = `{${jsonish}}`;
         try {
           return normalizeContentOutput(JSON.parse(wrapped));
         } catch {
@@ -583,7 +585,7 @@ function normalizeContentOutput(value: unknown): unknown {
 
       // Strategy 5: even if it doesn't start with quote, try wrapping.
       {
-        const wrapped = cleaned.startsWith("{") ? cleaned : `{${cleaned}}`;
+        const wrapped = jsonish.startsWith("{") ? jsonish : `{${jsonish}}`;
         try { return normalizeContentOutput(JSON.parse(repairJsonString(wrapped))); } catch { /* continue */ }
       }
 
@@ -612,6 +614,24 @@ function normalizeContentOutput(value: unknown): unknown {
   }
 
   return value;
+}
+
+function findJsonishObjectStart(text: string): number {
+  const patterns = [
+    /{\s*"title"\s*:/i,
+    /"title"\s*:/i,
+    /\btitle"\s*:/i,
+    /{\s*"subject"\s*:/i,
+  ];
+
+  let best = -1;
+  for (const pattern of patterns) {
+    const match = pattern.exec(text);
+    if (match?.index !== undefined && (best === -1 || match.index < best)) {
+      best = match.index;
+    }
+  }
+  return best;
 }
 
 function hasRequiredContentFields(value: unknown): boolean {
