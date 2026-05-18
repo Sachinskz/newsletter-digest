@@ -534,11 +534,44 @@ function normalizeContentOutput(value: unknown): unknown {
       }
 
       // LLM sometimes returns JSON without outer braces: "key": "value", ...
-      // Try wrapping in braces
       const cleaned = withoutFence.trim();
 
-      // Strategy 1: wrap in braces if it looks like key-value pairs
-      if (cleaned.startsWith('"') && !cleaned.startsWith('{')) {
+      // Strategy 1: agent runner omitted only the opening brace.
+      if (cleaned.startsWith('"') && !cleaned.startsWith("{") && cleaned.endsWith("}")) {
+        const wrapped = `{${cleaned}`;
+        try {
+          return normalizeContentOutput(JSON.parse(wrapped));
+        } catch {
+          const repaired = repairJsonString(wrapped);
+          try { return normalizeContentOutput(JSON.parse(repaired)); } catch { /* continue */ }
+        }
+      }
+
+      // Strategy 2: agent runner omitted the opening brace and the first quote.
+      // Example: title":"...","subject":"",...}
+      if (/^[A-Za-z_][\w-]*":/.test(cleaned) && cleaned.endsWith("}")) {
+        const wrapped = `{"${cleaned}`;
+        try {
+          return normalizeContentOutput(JSON.parse(wrapped));
+        } catch {
+          const repaired = repairJsonString(wrapped);
+          try { return normalizeContentOutput(JSON.parse(repaired)); } catch { /* continue */ }
+        }
+      }
+
+      // Strategy 3: agent runner omitted only the closing brace.
+      if (cleaned.startsWith("{") && !cleaned.endsWith("}")) {
+        const wrapped = `${cleaned}}`;
+        try {
+          return normalizeContentOutput(JSON.parse(wrapped));
+        } catch {
+          const repaired = repairJsonString(wrapped);
+          try { return normalizeContentOutput(JSON.parse(repaired)); } catch { /* continue */ }
+        }
+      }
+
+      // Strategy 4: wrap in braces if it looks like key-value pairs.
+      if (cleaned.startsWith('"') && !cleaned.startsWith("{")) {
         const wrapped = `{${cleaned}}`;
         try {
           return normalizeContentOutput(JSON.parse(wrapped));
@@ -548,7 +581,7 @@ function normalizeContentOutput(value: unknown): unknown {
         }
       }
 
-      // Strategy 2: even if it doesn't start with quote, try wrapping
+      // Strategy 5: even if it doesn't start with quote, try wrapping.
       {
         const wrapped = cleaned.startsWith("{") ? cleaned : `{${cleaned}}`;
         try { return normalizeContentOutput(JSON.parse(repairJsonString(wrapped))); } catch { /* continue */ }

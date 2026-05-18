@@ -80,6 +80,21 @@ ${JSON.stringify(output, null, 2)}
     ).toEqual(output);
   });
 
+  it("accepts agent result strings missing the opening object brace", () => {
+    const output: SummaryOutput = {
+      title: "Career pivots surge",
+      tldr: "Workers are changing careers as layoffs and AI reshape labor demand.",
+      keyPoints: [{ point: "Nearly 80% of US professionals want a new job.", importance: "high" }],
+      actionItems: [{ action: "Review hiring plans for mid-career switchers.", urgency: "medium" }],
+      sentiment: "neutral",
+      topics: ["Career Pivot Trends", "Workforce Aging"],
+      readTimeMinutes: 6,
+    };
+    const withoutOpeningBrace = JSON.stringify(output, null, 2).replace(/^\{/, "");
+
+    expect(parseSummaryOutput({ result: withoutOpeningBrace })).toEqual(output);
+  });
+
   it("accepts nested result wrappers", () => {
     const output: SummaryOutput = {
       title: "AI briefing",

@@ -311,7 +311,22 @@ function extractJsonFromLLM(raw: string): unknown {
     try { return JSON.parse(repairJsonString(slice)); } catch { /* continue */ }
   }
 
-  // Try wrapping in braces (LLM omits outer {})
+  // Some agent runners stream object fields without the opening brace but keep
+  // the final closing brace: `"title": "...", ... }`.
+  if (withoutFence.includes('"') && !withoutFence.startsWith("{") && withoutFence.endsWith("}")) {
+    const repaired = `{${withoutFence}`;
+    try { return JSON.parse(repaired); } catch { /* continue */ }
+    try { return JSON.parse(repairJsonString(repaired)); } catch { /* continue */ }
+  }
+
+  // The inverse can also happen if a stream is truncated before the final brace.
+  if (withoutFence.startsWith("{") && !withoutFence.endsWith("}")) {
+    const repaired = `${withoutFence}}`;
+    try { return JSON.parse(repaired); } catch { /* continue */ }
+    try { return JSON.parse(repairJsonString(repaired)); } catch { /* continue */ }
+  }
+
+  // Try wrapping in braces (LLM omits both outer braces)
   if (withoutFence.includes('"') && !withoutFence.startsWith("{")) {
     const wrapped = `{${withoutFence}}`;
     try { return JSON.parse(wrapped); } catch { /* continue */ }

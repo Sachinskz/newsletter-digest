@@ -53,4 +53,32 @@ describe("content generation helpers", () => {
       notes: "Review",
     });
   });
+
+  it("accepts agent result strings missing the opening object brace", () => {
+    expect(
+      parseGeneratedContentOutput({
+        result:
+          '"title":"Career Change LinkedIn Post","subject":"","body":"The most interesting thing is the career pivot signal.","notes":"Add one concrete statistic before publishing."}',
+      }),
+    ).toEqual({
+      title: "Career Change LinkedIn Post",
+      subject: "",
+      body: "The most interesting thing is the career pivot signal.",
+      notes: "Add one concrete statistic before publishing.",
+    });
+  });
+
+  it("accepts agent result strings missing the opening brace and first quote", () => {
+    expect(
+      parseGeneratedContentOutput({
+        result:
+          'title":"Career Change LinkedIn Post","subject":"","body":"The most interesting thing is the career pivot signal.","notes":"Add one concrete statistic before publishing."}',
+      }),
+    ).toEqual({
+      title: "Career Change LinkedIn Post",
+      subject: "",
+      body: "The most interesting thing is the career pivot signal.",
+      notes: "Add one concrete statistic before publishing.",
+    });
+  });
 });
