@@ -166,6 +166,17 @@ describe("newsletter sync route", () => {
       "key_insights",
     );
     expect(mocks.markEmailSummarized).toHaveBeenCalledWith("data-token", "emails-doc", "email-1", "summary-1");
+    expect(mocks.createSummary).toHaveBeenCalledWith(
+      "data-token",
+      "summaries-doc",
+      "email-1",
+      expect.objectContaining({ title: "Policy update" }),
+      "key_insights",
+      expect.objectContaining({
+        generationSource: "llm",
+        generationModel: "newsletter-analyst",
+      }),
+    );
   });
 
   it("backfills existing unsummarized newsletters during sync without waiting on agent generation", async () => {
@@ -229,6 +240,10 @@ describe("newsletter sync route", () => {
         sentiment: "neutral",
       }),
       "bullet_points",
+      expect.objectContaining({
+        generationSource: "fallback",
+        generationModel: "deterministic-backfill",
+      }),
     );
     expect(mocks.markEmailSummarized).toHaveBeenCalledWith("data-token", "emails-doc", "existing-1", "summary-backfill-1");
   });

@@ -18,7 +18,7 @@ import { getMessageDetail, listRecentMessages, refreshIfNeeded } from "@/lib/mic
 import { isNewsletter } from "@/lib/newsletter-detection";
 import { normalizeEmailText } from "@/lib/html-to-text";
 import { buildFallbackSummary, DEFAULT_SUMMARY_FORMAT, requestNewsletterSummary } from "@/lib/summarization";
-import type { MicrosoftTokenSet } from "@/lib/types";
+import type { MicrosoftTokenSet, NewsletterEmail, NewsletterSummary } from "@/lib/types";
 
 export async function POST(request: NextRequest) {
   const dataAuth = await requireAuthWithTokenExchange(request, "data-api");
@@ -112,16 +112,10 @@ export async function POST(request: NextRequest) {
     });
     await upsertSubscriptionFromEmail(dataAuth.apiToken, ids.subscriptions, email);
 
-    const output = await requestNewsletterSummary(agentAuth.apiToken, email, summaryFormat).catch((error) => {
+    const { output, metadata } = await summarizeWithMetadata(agentAuth.apiToken, email, summaryFormat, (error) => {
       summaryFailures += 1;
-      console.error("[newsletters/sync] Auto-summary failed, using fallback:", {
-        emailId: email.id,
-        subject: email.subject,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return buildFallbackSummary(email, summaryFormat);
     });
-    const summary = await createSummary(dataAuth.apiToken, ids.summaries, email.id, output, summaryFormat);
+    const summary = await createSummary(dataAuth.apiToken, ids.summaries, email.id, output, summaryFormat, metadata);
     await markEmailSummarized(dataAuth.apiToken, ids.emails, email.id, summary.id);
     summarized += 1;
 
@@ -134,7 +128,11 @@ export async function POST(request: NextRequest) {
 
   for (const email of backlog) {
     const output = buildFallbackSummary(email, summaryFormat);
-    const summary = await createSummary(dataAuth.apiToken, ids.summaries, email.id, output, summaryFormat);
+    const summary = await createSummary(dataAuth.apiToken, ids.summaries, email.id, output, summaryFormat, {
+      generationSource: "fallback",
+      generationModel: "deterministic-backfill",
+      generationError: "Backfilled during sync without waiting on agent generation.",
+    });
     await markEmailSummarized(dataAuth.apiToken, ids.emails, email.id, summary.id);
     summarized += 1;
   }
@@ -148,4 +146,38 @@ export async function POST(request: NextRequest) {
   });
 
   return NextResponse.json({ scanned, detected, inserted, summarized, summaryFailures, skippedExisting });
+}
+
+async function summarizeWithMetadata(
+  agentToken: string,
+  email: NewsletterEmail,
+  summaryFormat: Parameters<typeof requestNewsletterSummary>[2],
+  onFallback: (error: unknown) => void,
+) {
+  try {
+    const output = await requestNewsletterSummary(agentToken, email, summaryFormat);
+    return {
+      output,
+      metadata: {
+        generationSource: "llm",
+        generationModel: process.env.NEWSLETTER_SUMMARY_AGENT_NAME || "newsletter-analyst",
+      } satisfies Pick<NewsletterSummary, "generationSource" | "generationModel" | "generationError">,
+    };
+  } catch (error) {
+    onFallback(error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error("[newsletters/sync] Auto-summary failed, using fallback:", {
+      emailId: email.id,
+      subject: email.subject,
+      error: errorMessage,
+    });
+    return {
+      output: buildFallbackSummary(email, summaryFormat),
+      metadata: {
+        generationSource: "fallback",
+        generationModel: "deterministic-fallback",
+        generationError: errorMessage,
+      } satisfies Pick<NewsletterSummary, "generationSource" | "generationModel" | "generationError">,
+    };
+  }
 }

@@ -10,6 +10,7 @@ import {
   markEmailSummarized,
 } from "@/lib/data-api-client";
 import { buildFallbackSummary, DEFAULT_SUMMARY_FORMAT, requestNewsletterSummary } from "@/lib/summarization";
+import type { NewsletterSummary } from "@/lib/types";
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -42,14 +43,24 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
   const summaryFormat = preferences?.summaryFormat || DEFAULT_SUMMARY_FORMAT;
 
   try {
+    let generationMetadata: Pick<NewsletterSummary, "generationSource" | "generationModel" | "generationError"> = {
+      generationSource: "llm",
+      generationModel: process.env.NEWSLETTER_SUMMARY_AGENT_NAME || "newsletter-analyst",
+    };
     const output = await requestNewsletterSummary(auth.apiToken, newsletter, summaryFormat).catch((error) => {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      generationMetadata = {
+        generationSource: "fallback",
+        generationModel: "deterministic-fallback",
+        generationError: errorMessage,
+      };
       console.error("[newsletters/summarize] All summarization paths failed, using fallback:", {
         emailId: newsletter.id,
-        error: error instanceof Error ? error.message : String(error),
+        error: errorMessage,
       });
       return buildFallbackSummary(newsletter, summaryFormat);
     });
-    const summary = await createSummary(dataAuth.apiToken, ids.summaries, newsletter.id, output, summaryFormat);
+    const summary = await createSummary(dataAuth.apiToken, ids.summaries, newsletter.id, output, summaryFormat, generationMetadata);
     await markEmailSummarized(dataAuth.apiToken, ids.emails, newsletter.id, summary.id);
     return NextResponse.json({ summary });
   } catch (error) {

@@ -90,7 +90,17 @@ describe("newsletter summarize route", () => {
       newsletter,
       "key_insights",
     );
-    expect(mocks.createSummary).toHaveBeenCalledWith("data-token", "summaries-doc", "email-1", summaryOutput, "key_insights");
+    expect(mocks.createSummary).toHaveBeenCalledWith(
+      "data-token",
+      "summaries-doc",
+      "email-1",
+      summaryOutput,
+      "key_insights",
+      expect.objectContaining({
+        generationSource: "llm",
+        generationModel: "newsletter-analyst",
+      }),
+    );
   });
 
   it("falls back to a deterministic summary when agent generation fails", async () => {
@@ -131,6 +141,11 @@ describe("newsletter summarize route", () => {
         sentiment: "neutral",
       }),
       "bullet_points",
+      expect.objectContaining({
+        generationSource: "fallback",
+        generationModel: "deterministic-fallback",
+        generationError: "agent timeout",
+      }),
     );
   });
 });

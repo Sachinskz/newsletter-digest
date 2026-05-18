@@ -14,6 +14,7 @@ export interface ApiResponse<T> {
 export type ConnectionStatus = "active" | "expired" | "revoked";
 
 export type SummaryFormat = "bullet_points" | "executive_summary" | "key_insights" | "full_digest";
+export type SummaryGenerationSource = "llm" | "fallback";
 export type ContentKind = "linkedin" | "email" | "thought" | "newsletter" | "talking" | "investor";
 export type ContentTone = "Analytical" | "Executive" | "Conversational" | "Punchy" | "Sober" | "Visionary";
 export type LinkedInConnectionStatus = "active" | "expired" | "revoked";
@@ -93,6 +94,9 @@ export interface NewsletterSummary {
   id: string;
   emailId: string;
   format?: SummaryFormat;
+  generationSource?: SummaryGenerationSource;
+  generationModel?: string;
+  generationError?: string;
   title: string;
   tldr: string;
   keyPoints: string;

@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 import Link from "next/link";
-import { Bookmark, ChevronRight, Linkedin, ListChecks, Mail, Search, Sparkles, X } from "lucide-react";
+import { AlertTriangle, Bookmark, Bot, ChevronRight, Linkedin, ListChecks, Mail, RefreshCw, Search, Sparkles, X } from "lucide-react";
 import {
   categoryTone,
   deriveLibraryArticles,
@@ -26,6 +27,7 @@ export default function LibraryPage() {
   const [savedIds, setSavedIds] = useState<string[]>([]);
   const [selectedArticle, setSelectedArticle] = useState<LibraryArticle | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [retryingSummaryId, setRetryingSummaryId] = useState<string | null>(null);
 
   useEffect(() => {
     function syncRequestedArticle() {
@@ -111,6 +113,59 @@ export default function LibraryPage() {
     showToast(message);
   }
 
+  async function reloadArticles(selectedId?: string) {
+    const [newslettersRes, summariesRes, relevanceRes, preferencesRes] = await Promise.all([
+      fetch("/api/newsletters"),
+      fetch("/api/summaries"),
+      fetch("/api/client-relevance"),
+      fetch("/api/preferences"),
+    ]);
+    const newslettersData = await newslettersRes.json();
+    const summariesData = await summariesRes.json();
+    const relevanceData = await relevanceRes.json().catch(() => ({}));
+    const preferencesData = await preferencesRes.json().catch(() => ({}));
+    const nextPreferences = (preferencesData.preferences || null) as NewsletterPreferences | null;
+    const derived = deriveLibraryArticles(
+      (newslettersData.newsletters || []) as NewsletterEmail[],
+      (summariesData.summaries || []) as NewsletterSummary[],
+      nextPreferences,
+    );
+    const groupedMatches = ((relevanceData.matches || []) as NewsletterClientMatch[]).reduce<Record<string, NewsletterClientMatch[]>>(
+      (accumulator, match) => {
+        if (!accumulator[match.articleId]) accumulator[match.articleId] = [];
+        accumulator[match.articleId].push(match);
+        return accumulator;
+      },
+      {},
+    );
+    Object.values(groupedMatches).forEach((entries) => entries.sort((a, b) => b.score - a.score));
+    setArticles(derived);
+    setPreferences(nextPreferences);
+    setMatchesByArticleId(groupedMatches);
+    if (selectedId) {
+      setSelectedArticle(derived.find((article) => article.id === selectedId) || null);
+    }
+  }
+
+  async function retrySummary(articleId: string) {
+    setRetryingSummaryId(articleId);
+    try {
+      const response = await fetch(`/api/newsletters/${encodeURIComponent(articleId)}/summarize?force=true`, {
+        method: "POST",
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.details || body.error || "Summary retry failed");
+      }
+      await reloadArticles(articleId);
+      showToast("Summary regenerated");
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "Summary retry failed");
+    } finally {
+      setRetryingSummaryId(null);
+    }
+  }
+
   const categories = useMemo(() => ["All", ...Array.from(new Set(articles.map((article) => article.category)))], [articles]);
 
   const filteredArticles = useMemo(() => {
@@ -190,6 +245,7 @@ export default function LibraryPage() {
                     <span>{article.source}</span>
                     <span>{formatReceivedAt(article.receivedAt)}</span>
                   </div>
+                  {article.summaryRecord ? <SummarySourceChip summary={article.summaryRecord} className="mt-2" /> : null}
                   <p className="mt-2 line-clamp-3 text-[12.5px] leading-relaxed text-white/65">{article.summary}</p>
                   <div className="mt-2 line-clamp-2 text-[12px] leading-relaxed text-white/55">
                     <span className="font-medium text-white/75">Why: </span>
@@ -259,6 +315,8 @@ export default function LibraryPage() {
           saved={savedIds.includes(selectedArticle.id)}
           onClose={() => setSelectedArticle(null)}
           onToggleSave={() => toggleSave(selectedArticle.id)}
+          onRetrySummary={() => retrySummary(selectedArticle.id)}
+          retryingSummary={retryingSummaryId === selectedArticle.id}
         />
       ) : null}
 
@@ -276,11 +334,15 @@ function ArticleDrawer({
   saved,
   onClose,
   onToggleSave,
+  onRetrySummary,
+  retryingSummary,
 }: {
   article: LibraryArticle;
   saved: boolean;
   onClose: () => void;
   onToggleSave: () => void;
+  onRetrySummary: () => void;
+  retryingSummary: boolean;
 }) {
   useEffect(() => {
     function onEscape(event: KeyboardEvent) {
@@ -323,12 +385,19 @@ function ArticleDrawer({
 
           {article.summaryRecord ? (
             <div className="mt-5 rounded-xl border border-violet-400/15 bg-violet-500/[0.05] p-4">
-              <div className="flex items-center gap-2 text-[11px] uppercase tracking-wider text-violet-200/80">
-                <Sparkles size={13} />
-                AI brief
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="inline-flex items-center gap-2 text-[11px] uppercase tracking-wider text-violet-200/80">
+                    <Sparkles size={13} />
+                    AI brief
+                  </span>
+                  <SummarySourceChip summary={article.summaryRecord} />
+                </div>
+                <RetrySummaryButton onClick={onRetrySummary} loading={retryingSummary} label="Retry summary" />
               </div>
               <div className="mt-2 text-[16px] font-medium leading-snug text-white">{article.summaryRecord.title}</div>
               <p className="mt-2 text-[13.5px] leading-6 text-white/78">{article.summaryRecord.tldr}</p>
+              <SummarySourceDetail summary={article.summaryRecord} />
 
               {parseKeyPoints(article.summaryRecord.keyPoints).length > 0 ? (
                 <div className="mt-4">
@@ -361,7 +430,8 @@ function ArticleDrawer({
             </div>
           ) : (
             <div className="mt-5 rounded-xl border border-white/8 bg-white/[0.02] p-4 text-[13px] leading-6 text-white/58">
-              No AI summary has been generated for this article yet.
+              <div>No AI summary has been generated for this article yet.</div>
+              <RetrySummaryButton onClick={onRetrySummary} loading={retryingSummary} label="Generate summary" className="mt-3" />
             </div>
           )}
 
@@ -432,6 +502,76 @@ function ScoreCard({ label, value }: { label: string; value: number }) {
       </div>
     </div>
   );
+}
+
+function RetrySummaryButton({
+  onClick,
+  loading,
+  label,
+  className = "",
+}: {
+  onClick: () => void;
+  loading: boolean;
+  label: string;
+  className?: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={loading}
+      className={`analyst-btn analyst-btn-ghost px-2.5 py-1.5 text-[11px] disabled:cursor-wait disabled:opacity-55 ${className}`}
+    >
+      <RefreshCw size={12} className={loading ? "animate-spin" : ""} />
+      {loading ? "Regenerating..." : label}
+    </button>
+  );
+}
+
+function SummarySourceChip({ summary, className = "" }: { summary: NewsletterSummary; className?: string }) {
+  const source = getSummarySource(summary);
+  return (
+    <span className={`analyst-chip ${source.className} ${className}`}>
+      {source.icon}
+      {source.label}
+    </span>
+  );
+}
+
+function SummarySourceDetail({ summary }: { summary: NewsletterSummary }) {
+  const source = getSummarySource(summary);
+  if (!source.detail) return null;
+  return <div className="mt-2 text-[11.5px] leading-5 text-white/40">{source.detail}</div>;
+}
+
+function getSummarySource(summary: NewsletterSummary): {
+  label: string;
+  detail?: string;
+  className: string;
+  icon: ReactNode;
+} {
+  if (summary.generationSource === "llm") {
+    return {
+      label: "LLM generated",
+      detail: summary.generationModel ? `Generated through ${summary.generationModel}.` : undefined,
+      className: "border-emerald-400/25 bg-emerald-400/10 text-emerald-200",
+      icon: <Bot size={11} />,
+    };
+  }
+  if (summary.generationSource === "fallback") {
+    return {
+      label: "Fallback / non-LLM",
+      detail: summary.generationError ? `Fallback reason: ${summary.generationError}` : "Generated from deterministic article text fallback.",
+      className: "border-amber-300/25 bg-amber-300/10 text-amber-100",
+      icon: <AlertTriangle size={11} />,
+    };
+  }
+  return {
+    label: "Source unknown",
+    detail: "Legacy summary created before source tracking was added. Retry to verify with the LLM.",
+    className: "border-white/10 bg-white/[0.04] text-white/50",
+    icon: <AlertTriangle size={11} />,
+  };
 }
 
 function parseKeyPoints(value: string): Array<{ point: string; importance: string }> {
