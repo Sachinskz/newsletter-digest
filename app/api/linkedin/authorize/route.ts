@@ -6,7 +6,10 @@ const COOKIE_MAX_AGE = 10 * 60;
 
 function appUrl(path: string, request: NextRequest): URL {
   const basePath = process.env.NEXT_PUBLIC_BASE_PATH || "";
-  return new URL(`${basePath}${path}`, request.url);
+  const fwdHost = request.headers.get("x-forwarded-host");
+  const fwdProto = request.headers.get("x-forwarded-proto") || "https";
+  const base = fwdHost ? `${fwdProto}://${fwdHost}` : request.url;
+  return new URL(`${basePath}${path}`, base);
 }
 
 export async function GET(request: NextRequest) {

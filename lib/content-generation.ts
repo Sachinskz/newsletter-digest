@@ -491,10 +491,10 @@ function stripThinking(content: string): string {
     text = text.replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/gi, "");
   }
 
-  // Strip plain-text "Thinking Process:" / "**Thinking" preambles.
-  // These have no end marker, so find the first `{` that starts valid JSON.
+  // Strip plain-text thinking preambles (no end marker — find first valid JSON `{`).
+  // Matches: "Thinking Process:", "**Thinking", "Step 1:", numbered analysis, etc.
   const stripped = text.trim();
-  if (/^(?:\*{0,2}thinking|step\s*1[:.)])/i.test(stripped)) {
+  if (/^(?:\*{0,2}thinking|step\s*\d[:.)]|#+\s|1\.\s|\*\*analyze)/i.test(stripped)) {
     const braceIdx = stripped.indexOf("{");
     if (braceIdx > 0) {
       text = stripped.slice(braceIdx);
