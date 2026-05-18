@@ -45,6 +45,17 @@ describe("content generation helpers", () => {
     expect(() => parseGeneratedContentOutput({ title: "Draft" })).toThrow("missing required fields");
   });
 
+  it("rejects placeholder generated output", () => {
+    expect(() =>
+      parseGeneratedContentOutput({
+        title: "...",
+        subject: "",
+        body: "...",
+        notes: "...",
+      }),
+    ).toThrow("placeholder or empty fields");
+  });
+
   it("normalizes missing subject to an empty string", () => {
     expect(parseGeneratedContentOutput({ title: "Draft", body: "Body", notes: "Review" })).toEqual({
       title: "Draft",

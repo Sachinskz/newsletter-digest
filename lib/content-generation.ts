@@ -124,6 +124,9 @@ export function parseGeneratedContentOutput(value: unknown): GeneratedContentOut
   if (typeof output.title !== "string" || typeof output.body !== "string" || typeof output.notes !== "string") {
     throw new Error(`Generated content output is missing required fields. Keys: ${Object.keys(normalized as object).join(", ")}. Raw: ${JSON.stringify(normalized)?.slice(0, 300)}`);
   }
+  if (!isUsefulGeneratedText(output.title) || !isUsefulGeneratedText(output.body) || !isUsefulGeneratedText(output.notes)) {
+    throw new Error(`Generated content output contains placeholder or empty fields. Raw: ${JSON.stringify(normalized)?.slice(0, 300)}`);
+  }
 
   return {
     title: output.title,
@@ -223,7 +226,12 @@ export async function requestContentGeneration(
   // configured in the Busibox portal, while app-level LLM env vars may be empty.
   try {
     console.log("[ContentGeneration] Using BusiBox agent:", CONTENT_AGENT_NAME, "tier:", CONTENT_AGENT_TIER);
-    const agentPrompt = `Return ONLY a JSON object with these four fields — no markdown, no extra text:\n{"title":"...","subject":"...","body":"...","notes":"..."}\n\nwhere title is a short label, subject is the email subject (empty for non-email), body is the FULL written content, and notes is one editorial note.\n\n${prompt}`;
+    const agentPrompt = `Return ONLY a JSON object with these four fields — no markdown, no extra text:
+{"title":"short specific label","subject":"email subject or empty string","body":"full generated draft text","notes":"one useful editorial note"}
+
+Do not return placeholders such as "...". The body must contain the complete generated content.
+
+${prompt}`;
     return await invokeContentGeneratorAgent(agentApiToken, agentPrompt, TIMEOUT_MS);
   } catch (agentError) {
     console.warn("[ContentGeneration] Agent invocation failed, trying direct LLM fallback:",
@@ -642,6 +650,14 @@ function hasRequiredContentFields(value: unknown): boolean {
     typeof output.body === "string" &&
     typeof output.notes === "string"
   );
+}
+
+function isUsefulGeneratedText(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return false;
+  if (/^[.\s_-]+$/.test(normalized)) return false;
+  if (["...", "n/a", "none", "null", "undefined"].includes(normalized)) return false;
+  return normalized.replace(/[^a-z0-9]/gi, "").length >= 3;
 }
 
 /**
