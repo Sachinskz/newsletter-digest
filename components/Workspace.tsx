@@ -225,14 +225,17 @@ function DashboardTopBar() {
               ? { title: "Settings", subtitle: "Manage Microsoft access, summary format, and generation behavior." }
               : { title: "Dashboard", subtitle: "What you need to know about AI today." };
   return (
-    <div className="px-8 pt-7 pb-5 border-b border-white/5">
+    <div className="border-b border-[#ea580c]/18 bg-[linear-gradient(180deg,rgba(234,88,12,0.16),rgba(234,88,12,0.05)_58%,rgba(6,7,11,0.02))] px-8 pt-7 pb-5 shadow-[inset_0_-1px_0_rgba(255,255,255,0.02)]">
       <div className="max-w-[1400px] mx-auto flex items-center justify-between gap-6">
         <div>
-          <h1 className="text-[22px] font-semibold tracking-tight text-white">{meta.title}</h1>
-          <p className="text-[13px] text-white/50 mt-0.5">{meta.subtitle}</p>
+          <div className="inline-flex items-center gap-2 rounded-full border border-[#fb923c]/25 bg-[#fb923c]/10 px-[10px] py-[3px] text-[10.5px] font-semibold uppercase tracking-[0.18em] text-[#fed7aa]">
+            Briefing workspace
+          </div>
+          <h1 className="mt-3 text-[22px] font-semibold tracking-tight text-white">{meta.title}</h1>
+          <p className="mt-0.5 text-[13px] text-white/58">{meta.subtitle}</p>
         </div>
         <div className="flex items-center gap-2">
-          <div className="hidden md:flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-[10px] py-[3px] text-[11px] font-medium text-white/55">
+          <div className="hidden md:flex items-center gap-2 rounded-full border border-[#fdba74]/18 bg-[#fdba74]/8 px-[10px] py-[3px] text-[11px] font-medium text-[#fed7aa]">
             <Clock3 size={12} />
             Updated recently
           </div>
