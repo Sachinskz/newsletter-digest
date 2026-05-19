@@ -11,24 +11,23 @@
   "buildCommand": "npm run build",
   "startCommand": "npm start",
   "appMode": "frontend",
-  "requiredEnvVars": [
+  "requiredEnvVars": [],
+  "optionalEnvVars": [
     "MS_CLIENT_ID",
     "MS_CLIENT_SECRET",
     "MS_REDIRECT_URI",
-    "LINKEDIN_CLIENT_ID",
-    "LINKEDIN_CLIENT_SECRET",
-    "LINKEDIN_REDIRECT_URI"
-  ],
-  "optionalEnvVars": [
     "MS_TENANT_ID",
     "MS_SHARED_MAILBOX",
+    "LINKEDIN_CLIENT_ID",
+    "LINKEDIN_CLIENT_SECRET",
+    "LINKEDIN_REDIRECT_URI",
+    "LINKEDIN_API_VERSION",
     "NEWSLETTER_SUMMARY_AGENT_NAME",
     "NEWSLETTER_SUMMARY_AGENT_TIER",
     "CONTENT_GENERATOR_AGENT_NAME",
     "CONTENT_GENERATOR_AGENT_TIER",
     "CLIENT_RELEVANCE_AGENT_NAME",
-    "CLIENT_RELEVANCE_AGENT_TIER",
-    "LINKEDIN_API_VERSION"
+    "CLIENT_RELEVANCE_AGENT_TIER"
   ],
   "busiboxAppVersion": "^3.0.0"
 }
