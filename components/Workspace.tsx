@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import type { ComponentType, ReactNode } from "react";
 import { AppWindow, BookOpenText, BriefcaseBusiness, Clock3, Home, Inbox, LogOut, Mail, PenLine, Settings, Sparkles, UserCircle } from "lucide-react";
 import { useSession } from "@jazzmind/busibox-app/components/auth/SessionProvider";
+import { Header } from "@jazzmind/busibox-app/layout";
 
 const portalBaseUrl = (process.env.NEXT_PUBLIC_BUSIBOX_PORTAL_URL || process.env.NEXT_PUBLIC_AI_PORTAL_URL || "").replace(/\/+$/, "");
 const portalUrl = portalBaseUrl
@@ -12,6 +13,19 @@ const portalUrl = portalBaseUrl
     ? portalBaseUrl
     : `${portalBaseUrl}/portal`
   : "/portal";
+
+function BusiboxHeader() {
+  const { user, logout } = useSession();
+  const session = { user: user ? { ...user as Record<string, unknown>, roles: ((user as Record<string, unknown>)?.roles as string[]) || [] } : null } as import("@jazzmind/busibox-app").SessionData;
+  return (
+    <Header
+      session={session}
+      onLogout={logout}
+      appsLink={`${portalUrl}/home`}
+      accountLink={`${portalUrl}/account`}
+    />
+  );
+}
 
 const navItems = [
   { href: "/", label: "Dashboard", icon: Home },
@@ -30,6 +44,7 @@ export function WorkspaceLayout({ children }: { children: ReactNode }) {
 
   return (
     <div className="min-h-screen overflow-hidden bg-[#06070b] text-[#e7e9ee]">
+      <BusiboxHeader />
       <div className="pointer-events-none fixed inset-0 z-0 bg-[radial-gradient(700px_500px_at_12%_-10%,rgba(124,92,255,0.18),transparent_60%),radial-gradient(900px_600px_at_95%_10%,rgba(44,208,255,0.10),transparent_60%),radial-gradient(800px_600px_at_60%_110%,rgba(124,92,255,0.10),transparent_60%)]" />
       <div className="relative z-10 flex min-h-screen">
         <AppSidebar />
@@ -44,14 +59,17 @@ export function WorkspaceLayout({ children }: { children: ReactNode }) {
 function DashboardWorkspace({ children }: { children: ReactNode }) {
   return (
     <div
-      className="min-h-screen flex bg-[#06070b] text-[#e7e9ee]"
+      className="min-h-screen flex flex-col bg-[#06070b] text-[#e7e9ee]"
       style={{ fontFamily: "var(--font-inter), ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" }}
     >
-      <DashboardSidebar />
-      <main className="flex-1 min-w-0">
-        <DashboardTopBar />
-        <div className="px-8 py-6 max-w-[1400px] mx-auto fade-lift">{children}</div>
-      </main>
+      <BusiboxHeader />
+      <div className="flex flex-1 min-h-0">
+        <DashboardSidebar />
+        <main className="flex-1 min-w-0">
+          <DashboardTopBar />
+          <div className="px-8 py-6 max-w-[1400px] mx-auto fade-lift">{children}</div>
+        </main>
+      </div>
     </div>
   );
 }
