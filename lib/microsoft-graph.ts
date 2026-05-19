@@ -25,6 +25,26 @@ export async function getMessageDetail(
   return graphFetch<GraphMessageDetail>(accessToken, `/me/messages/${encodeURIComponent(messageId)}?$select=${select}`);
 }
 
+export async function listSharedMailboxMessages(
+  accessToken: string,
+  mailbox: string,
+  limit = 50,
+): Promise<GraphMessageListItem[]> {
+  const select = ["id", "subject", "receivedDateTime", "from", "bodyPreview"].join(",");
+  const path = `/users/${encodeURIComponent(mailbox)}/mailFolders/inbox/messages?$top=${limit}&$orderby=receivedDateTime desc&$select=${select}`;
+  const data = await graphFetch<{ value?: GraphMessageListItem[] }>(accessToken, path);
+  return data.value ?? [];
+}
+
+export async function getSharedMailboxMessageDetail(
+  accessToken: string,
+  mailbox: string,
+  messageId: string,
+): Promise<GraphMessageDetail> {
+  const select = ["id", "subject", "receivedDateTime", "from", "bodyPreview", "body", "internetMessageHeaders"].join(",");
+  return graphFetch<GraphMessageDetail>(accessToken, `/users/${encodeURIComponent(mailbox)}/messages/${encodeURIComponent(messageId)}?$select=${select}`);
+}
+
 export async function refreshIfNeeded(tokens: MicrosoftTokenSet): Promise<{
   tokens: MicrosoftTokenSet;
   refreshed: boolean;

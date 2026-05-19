@@ -32,6 +32,14 @@ interface ConnectionResponse {
   lastSyncAt?: string;
 }
 
+interface SystemStatus {
+  configured: boolean;
+  mailbox: string | null;
+  articleCount: number;
+  subscriptionCount: number;
+  lastSyncAt: string | null;
+}
+
 interface PreferencesResponse {
   preferences: NewsletterPreferences | null;
   hasPreferences: boolean;
@@ -52,6 +60,7 @@ interface DashboardArticle {
 }
 
 export default function DigestPage() {
+  const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
   const [connection, setConnection] = useState<ConnectionResponse | null>(null);
   const [preferences, setPreferences] = useState<PreferencesResponse | null>(null);
   const [newsletters, setNewsletters] = useState<NewsletterEmail[]>([]);
@@ -64,13 +73,15 @@ export default function DigestPage() {
   async function loadDashboard() {
     setError(null);
     try {
-      const [statusRes, preferencesRes, newslettersRes, summariesRes] = await Promise.all([
+      const [systemStatusRes, statusRes, preferencesRes, newslettersRes, summariesRes] = await Promise.all([
+        fetch("/api/system/status"),
         fetch("/api/oauth/status"),
         fetch("/api/preferences"),
         fetch("/api/newsletters"),
         fetch("/api/summaries"),
       ]);
 
+      const systemStatusData = systemStatusRes.ok ? await systemStatusRes.json() : null;
       const statusData = await statusRes.json();
       const preferencesData = await preferencesRes.json();
       const newslettersData = await newslettersRes.json();
@@ -81,6 +92,7 @@ export default function DigestPage() {
       if (!newslettersRes.ok) throw new Error(newslettersData.error || "Could not load newsletters");
       if (!summariesRes.ok) throw new Error(summariesData.error || "Could not load summaries");
 
+      setSystemStatus(systemStatusData);
       setConnection(statusData);
       setPreferences(preferencesData);
       setNewsletters(newslettersData.newsletters || []);
@@ -135,13 +147,17 @@ export default function DigestPage() {
   const pending = newsletters.filter((newsletter) => !newsletter.hasBeenSummarized);
   const hasBriefingProfile = Boolean(preferences?.hasProfile);
 
-  const heroTitle = connection?.connected
-    ? briefArticles[0]?.title || "Your AI brief is ready as soon as the first newsletters sync in."
-    : "Connect Microsoft 365 to turn your AI inbox into a daily executive brief.";
+  const hasSource = systemStatus?.configured || connection?.connected;
 
-  const heroSub = connection?.connected
+  const heroTitle = hasSource
+    ? briefArticles[0]?.title || "Your AI brief is ready as soon as the first newsletters sync in."
+    : "Set up an article source to turn your AI inbox into a daily executive brief.";
+
+  const heroSub = hasSource
     ? `The highest-signal newsletter updates are ranked here first, formatted as ${formatOption.title.toLowerCase()} for faster review.`
-    : "The production path is live in the app. Once the portal owner finishes the OAuth setup, this dashboard will fill with ranked newsletter stories automatically.";
+    : systemStatus?.configured === false
+      ? "Configure the shared mailbox or connect your personal Microsoft 365 to start syncing newsletters."
+      : "Once the article source is configured, this dashboard will fill with ranked newsletter stories automatically.";
 
   return (
     <div className="grid grid-cols-12 gap-6 text-[#e7e9ee]">
@@ -251,7 +267,9 @@ export default function DigestPage() {
                 ))
               ) : (
                 <li className="p-4 rounded-lg border border-white/5 bg-white/[0.02] text-[13px] text-white/55 leading-relaxed">
-                  No newsletters are stored yet. Once Outlook is connected and sync runs, the top stories of the day will appear here in ranked order.
+                  {systemStatus?.configured
+                    ? "No articles yet. Head to the Ingest page and click Sync now to pull newsletters from the shared mailbox."
+                    : "No newsletters are stored yet. Configure the shared mailbox or connect Microsoft 365 and run a sync to see ranked stories."}
                 </li>
               )}
             </ol>
@@ -261,8 +279,8 @@ export default function DigestPage() {
                 <FileText size={14} /> Open full brief
               </Link>
               <Link href="/settings" className="inline-flex items-center gap-2 rounded-[10px] border border-white/10 bg-white/[0.04] px-[14px] py-[8px] text-[13px] font-medium text-white transition hover:bg-white/[0.08]">
-                {connection?.connected ? <CirclePlus size={14} /> : <RefreshCw size={14} />}
-                {connection?.connected ? "Update format" : "Connect Microsoft"}
+                {hasSource ? <CirclePlus size={14} /> : <RefreshCw size={14} />}
+                {hasSource ? "Update format" : "Configure source"}
               </Link>
             </div>
           </div>
@@ -360,12 +378,12 @@ export default function DigestPage() {
               chipLabel={hasBriefingProfile ? "ranked" : "needed"}
             />
             <WorkflowCard
-              title={connection?.connected ? "Microsoft 365 connected" : "Connect Outlook"}
-              subtitle={connection?.connected ? connection.accountEmail || "Connected source" : "OAuth setup pending"}
-              body={connection?.connected ? "Your inbox can sync through the production Microsoft Graph flow." : "Once the portal owner finishes the redirect URI and secret setup, this dashboard can sync live newsletters."}
-              actionHref="/settings"
-              actionLabel={connection?.connected ? "Connection details" : "Open settings"}
-              chipLabel={connection?.connected ? "live" : "blocked"}
+              title={systemStatus?.configured ? "Shared mailbox active" : connection?.connected ? "Microsoft 365 connected" : "Article source"}
+              subtitle={systemStatus?.configured ? (systemStatus.mailbox || "Shared mailbox") : connection?.connected ? (connection.accountEmail || "Connected source") : "Not configured"}
+              body={systemStatus?.configured ? "Articles are pulled from the shared mailbox using app-only authentication. All team members see the same feed." : connection?.connected ? "Your personal inbox syncs through Microsoft Graph." : "Configure the shared mailbox or connect personal Microsoft 365 to start syncing."}
+              actionHref={systemStatus?.configured ? "/ingest" : "/settings"}
+              actionLabel={systemStatus?.configured ? "Open ingest" : connection?.connected ? "Connection details" : "Open settings"}
+              chipLabel={systemStatus?.configured ? "shared" : connection?.connected ? "personal" : "needed"}
             />
             <WorkflowCard
               title="Needs summary"

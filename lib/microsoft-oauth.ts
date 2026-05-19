@@ -14,6 +14,7 @@ function getTokenUrl(): string {
 }
 
 export const MICROSOFT_SCOPES = ["offline_access", "User.Read", "Mail.Read"];
+export const APP_ONLY_SCOPE = "https://graph.microsoft.com/.default";
 
 export function getMicrosoftConfig() {
   const clientId = process.env.MS_CLIENT_ID;
@@ -90,6 +91,54 @@ export async function exchangeCodeForTokens(input: {
     scope: MICROSOFT_SCOPES.join(" "),
   });
   return tokenRequest(body);
+}
+
+export function getSharedMailboxConfig() {
+  const clientId = process.env.MS_CLIENT_ID;
+  const clientSecret = process.env.MS_CLIENT_SECRET;
+  const tenantId = process.env.MS_TENANT_ID;
+  const sharedMailbox = process.env.MS_SHARED_MAILBOX;
+
+  if (!clientId) throw new Error("MS_CLIENT_ID is not configured");
+  if (!clientSecret) throw new Error("MS_CLIENT_SECRET is not configured");
+  if (!tenantId) throw new Error("MS_TENANT_ID is not configured for shared mailbox");
+  if (!sharedMailbox) throw new Error("MS_SHARED_MAILBOX is not configured");
+
+  return { clientId, clientSecret, tenantId, sharedMailbox };
+}
+
+export function isSharedMailboxConfigured(): boolean {
+  return !!(
+    process.env.MS_CLIENT_ID &&
+    process.env.MS_CLIENT_SECRET &&
+    process.env.MS_TENANT_ID &&
+    process.env.MS_SHARED_MAILBOX
+  );
+}
+
+export async function acquireAppOnlyToken(): Promise<string> {
+  const config = getSharedMailboxConfig();
+  const tokenUrl = `https://login.microsoftonline.com/${config.tenantId}/oauth2/v2.0/token`;
+
+  const body = new URLSearchParams({
+    client_id: config.clientId,
+    client_secret: config.clientSecret,
+    grant_type: "client_credentials",
+    scope: APP_ONLY_SCOPE,
+  });
+
+  const res = await fetch(tokenUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body,
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(`Client credentials token request failed (${res.status}): ${JSON.stringify(data)}`);
+  }
+
+  return data.access_token;
 }
 
 export async function refreshMicrosoftTokens(refreshToken: string): Promise<MicrosoftTokenSet> {

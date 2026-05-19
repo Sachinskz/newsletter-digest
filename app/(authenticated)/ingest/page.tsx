@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { AlertCircle, Check, Link2, LoaderCircle, Mail, RefreshCw, Shield } from "lucide-react";
+import { AlertCircle, Check, Inbox, Link2, LoaderCircle, Mail, RefreshCw, Shield } from "lucide-react";
 import type { NewsletterEmail, NewsletterSubscription } from "@/lib/types";
 
 interface ConnectionResponse {
@@ -13,7 +13,16 @@ interface ConnectionResponse {
   accessTokenExpiresAt?: string;
 }
 
+interface SystemStatus {
+  configured: boolean;
+  mailbox: string | null;
+  articleCount: number;
+  subscriptionCount: number;
+  lastSyncAt: string | null;
+}
+
 interface LoadState {
+  systemStatus: SystemStatus | null;
   connection: ConnectionResponse | null;
   subscriptions: NewsletterSubscription[];
   newsletters: NewsletterEmail[];
@@ -21,47 +30,42 @@ interface LoadState {
 
 export default function IngestPage() {
   const [state, setState] = useState<LoadState>({
+    systemStatus: null,
     connection: null,
     subscriptions: [],
     newsletters: [],
   });
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
-  const [disconnecting, setDisconnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
   async function loadState() {
     setError(null);
     try {
-      const [connectionRes, subscriptionsRes, newslettersRes] = await Promise.all([
+      const [systemStatusRes, connectionRes, subscriptionsRes, newslettersRes] = await Promise.all([
+        fetch("/api/system/status"),
         fetch("/api/oauth/status"),
         fetch("/api/subscriptions"),
         fetch("/api/newsletters"),
       ]);
 
-      const [connection, subscriptionsData, newslettersData] = await Promise.all([
+      const [systemStatus, connection, subscriptionsData, newslettersData] = await Promise.all([
+        systemStatusRes.ok ? systemStatusRes.json() : null,
         connectionRes.json(),
         subscriptionsRes.json(),
         newslettersRes.json(),
       ]);
 
-      if (!connectionRes.ok) throw new Error(connection.error || "Could not load Microsoft connection");
-      if (!subscriptionsRes.ok) throw new Error(subscriptionsData.error || "Could not load subscriptions");
-      if (!newslettersRes.ok) throw new Error(newslettersData.error || "Could not load newsletters");
-
       setState({
-        connection,
+        systemStatus,
+        connection: connectionRes.ok ? connection : null,
         subscriptions: subscriptionsData.subscriptions || [],
         newsletters: newslettersData.newsletters || [],
       });
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Could not load ingest status");
-      setState({
-        connection: null,
-        subscriptions: [],
-        newsletters: [],
-      });
+      setState({ systemStatus: null, connection: null, subscriptions: [], newsletters: [] });
     } finally {
       setLoading(false);
     }
@@ -80,11 +84,13 @@ export default function IngestPage() {
     setSyncing(true);
     setError(null);
     try {
-      const res = await fetch("/api/newsletters/sync", { method: "POST" });
+      const useShared = state.systemStatus?.configured;
+      const endpoint = useShared ? "/api/system/sync" : "/api/newsletters/sync";
+      const res = await fetch(endpoint, { method: "POST" });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Sync failed");
       await loadState();
-      showToast(`Synced ${data.insertedCount ?? 0} new newsletters`);
+      showToast(`Synced ${data.inserted ?? 0} new articles`);
     } catch (syncError) {
       setError(syncError instanceof Error ? syncError.message : "Sync failed");
     } finally {
@@ -92,21 +98,7 @@ export default function IngestPage() {
     }
   }
 
-  async function disconnect() {
-    setDisconnecting(true);
-    setError(null);
-    try {
-      const res = await fetch("/api/oauth/disconnect", { method: "POST" });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || "Disconnect failed");
-      await loadState();
-      showToast("Microsoft mailbox disconnected");
-    } catch (disconnectError) {
-      setError(disconnectError instanceof Error ? disconnectError.message : "Disconnect failed");
-    } finally {
-      setDisconnecting(false);
-    }
-  }
+  const useSharedMailbox = state.systemStatus?.configured;
 
   const pendingCount = useMemo(
     () => state.newsletters.filter((item) => !item.hasBeenSummarized).length,
@@ -121,26 +113,65 @@ export default function IngestPage() {
     <>
       <div className="grid grid-cols-12 gap-6 text-[#e7e9ee]">
         <section className="col-span-12 lg:col-span-8 space-y-5">
+          {/* Shared mailbox / connection card */}
           <div className="relative overflow-hidden rounded-2xl border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0.03))] p-6">
             <div className="pointer-events-none absolute inset-0 rounded-2xl [background:linear-gradient(135deg,rgba(124,92,255,.6),rgba(44,208,255,.3),transparent_60%)] [mask:linear-gradient(#000_0_0)_content-box,linear-gradient(#000_0_0)] [-webkit-mask:linear-gradient(#000_0_0)_content-box,linear-gradient(#000_0_0)] [mask-composite:exclude] [-webkit-mask-composite:xor] p-px" />
             {loading ? (
-              <div className="relative text-[13px] text-white/55">Loading Microsoft connection...</div>
+              <div className="relative text-[13px] text-white/55">Loading source configuration...</div>
+            ) : useSharedMailbox ? (
+              <div className="relative">
+                <div className="flex items-start gap-4">
+                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-violet-400/25 bg-violet-500/[0.12]">
+                    <Inbox size={22} className="text-violet-200" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-[16px] font-semibold text-white">{state.systemStatus?.mailbox}</span>
+                      <span className="inline-flex items-center gap-[6px] rounded-full border border-emerald-400/30 bg-emerald-400/10 px-[10px] py-[3px] text-[11px] font-medium text-emerald-200">
+                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-300" />
+                        Shared mailbox
+                      </span>
+                    </div>
+                    <div className="mt-1 text-[12.5px] text-white/55">
+                      Microsoft Graph · app-only auth · read-only · last sync {state.systemStatus?.lastSyncAt ? new Date(state.systemStatus.lastSyncAt).toLocaleString() : "never"}
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button className="ingest-btn-primary" type="button" onClick={syncNow} disabled={syncing}>
+                        {syncing ? <LoaderCircle size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+                        {syncing ? "Syncing..." : "Sync now"}
+                      </button>
+                    </div>
+                  </div>
+                  <div className="hidden shrink-0 flex-col items-end md:flex">
+                    <div className="text-[11px] uppercase tracking-wider text-white/40">Articles</div>
+                    <div className="text-[22px] font-semibold leading-tight text-white">{state.newsletters.length}</div>
+                    <div className="text-[11px] text-white/40">stored</div>
+                  </div>
+                </div>
+
+                <div className="mt-5 grid grid-cols-2 gap-3 border-t border-white/5 pt-5 md:grid-cols-4">
+                  <Metric label="Senders" value={state.subscriptions.length} />
+                  <Metric label="Articles" value={state.newsletters.length} accent />
+                  <Metric label="Pending" value={pendingCount} />
+                  <Metric label="Summarized" value={summarizedCount} />
+                </div>
+              </div>
             ) : !state.connection?.connected ? (
               <div className="relative flex items-start gap-4">
                 <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04]">
                   <Mail size={22} />
                 </div>
                 <div className="flex-1">
-                  <div className="text-[16px] font-semibold text-white">Connect your Microsoft 365 inbox</div>
+                  <div className="text-[16px] font-semibold text-white">No article source configured</div>
                   <p className="mt-1.5 text-[13px] leading-relaxed text-white/60">
-                    This page now shows only real ingest state. Once a mailbox is connected, sync will pull newsletters from Microsoft Graph and store them here.
+                    The shared mailbox is not yet configured. Ask your administrator to set <code className="rounded bg-white/10 px-1 py-0.5 text-[11.5px] font-mono text-violet-200">MS_TENANT_ID</code> and <code className="rounded bg-white/10 px-1 py-0.5 text-[11.5px] font-mono text-violet-200">MS_SHARED_MAILBOX</code> environment variables, or connect your personal Microsoft 365 inbox below.
                   </p>
                   <a
                     href="/api/oauth/authorize"
-                    className="mt-4 inline-flex items-center gap-2 rounded-[10px] border border-[#7c5cff]/60 bg-[linear-gradient(135deg,#7c5cff,#5b3df5)] px-[14px] py-[8px] text-[13px] font-medium text-white shadow-[0_6px_24px_-8px_rgba(124,92,255,.6)]"
+                    className="mt-4 inline-flex items-center gap-2 rounded-[10px] border border-white/20 bg-white/[0.06] px-[14px] py-[8px] text-[13px] font-medium text-white/80 hover:bg-white/[0.10]"
                   >
                     <Mail size={14} />
-                    Connect Microsoft 365
+                    Connect personal Microsoft 365
                   </a>
                 </div>
               </div>
@@ -153,24 +184,18 @@ export default function IngestPage() {
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="text-[16px] font-semibold text-white">{state.connection.accountEmail || "Microsoft 365 inbox"}</span>
-                      <span className="inline-flex items-center gap-[6px] rounded-full border border-emerald-400/30 bg-emerald-400/10 px-[10px] py-[3px] text-[11px] font-medium text-emerald-200">
-                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-300" />
-                        Connected
+                      <span className="inline-flex items-center gap-[6px] rounded-full border border-amber-300/30 bg-amber-300/10 px-[10px] py-[3px] text-[11px] font-medium text-amber-100">
+                        Personal fallback
                       </span>
                     </div>
                     <div className="mt-1 text-[12.5px] text-white/55">
-                      Microsoft 365 · OAuth · read-only · last sync {state.connection.lastSyncAt ? new Date(state.connection.lastSyncAt).toLocaleString() : "not available"}
+                      Using your personal Microsoft connection. Configure the shared mailbox for team-wide access.
                     </div>
                     <div className="mt-3 flex flex-wrap gap-2">
                       <button className="ingest-btn-primary" type="button" onClick={syncNow} disabled={syncing}>
                         {syncing ? <LoaderCircle size={13} className="animate-spin" /> : <RefreshCw size={13} />}
                         {syncing ? "Syncing..." : "Sync now"}
                       </button>
-                      <button className="ingest-btn" type="button" onClick={disconnect} disabled={disconnecting}>
-                        {disconnecting ? <LoaderCircle size={12} className="animate-spin" /> : <Link2 size={12} />}
-                        {disconnecting ? "Disconnecting..." : "Disconnect"}
-                      </button>
-                      <span className="ingest-btn cursor-default opacity-70">Filters & rules not wired</span>
                     </div>
                   </div>
                   <div className="hidden shrink-0 flex-col items-end md:flex">
@@ -179,7 +204,6 @@ export default function IngestPage() {
                     <div className="text-[11px] text-white/40">newsletters</div>
                   </div>
                 </div>
-
                 <div className="mt-5 grid grid-cols-2 gap-3 border-t border-white/5 pt-5 md:grid-cols-4">
                   <Metric label="Senders" value={state.subscriptions.length} />
                   <Metric label="Stored" value={state.newsletters.length} accent />
@@ -190,11 +214,16 @@ export default function IngestPage() {
             )}
           </div>
 
+          {/* Stored newsletters list */}
           <div className="rounded-2xl border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0.02))] p-5 backdrop-blur-[14px]">
             <div className="mb-3 flex items-center justify-between">
               <div>
-                <div className="text-[14px] font-medium text-white">Stored newsletters</div>
-                <div className="text-[12px] text-white/50">These are the real newsletter emails currently stored in data-api.</div>
+                <div className="text-[14px] font-medium text-white">Stored articles</div>
+                <div className="text-[12px] text-white/50">
+                  {useSharedMailbox
+                    ? `Articles from ${state.systemStatus?.mailbox}, available to all team members.`
+                    : "Newsletter emails stored in data-api."}
+                </div>
               </div>
             </div>
 
@@ -221,7 +250,9 @@ export default function IngestPage() {
               </div>
             ) : (
               <div className="rounded-lg border border-white/5 bg-white/[0.02] p-4 text-[12.5px] text-white/55">
-                No newsletters are stored yet. Connect Microsoft and run the first sync to see what the ingest pipeline is actually capturing.
+                {useSharedMailbox
+                  ? "No articles yet. Click Sync now to pull newsletters from the shared mailbox."
+                  : "No newsletters stored yet. Connect a source and run the first sync."}
               </div>
             )}
           </div>
@@ -230,7 +261,7 @@ export default function IngestPage() {
         <aside className="col-span-12 space-y-4 lg:col-span-4">
           <div className="rounded-2xl border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0.02))] p-5 backdrop-blur-[14px]">
             <div className="mb-3 flex items-center justify-between">
-              <div className="text-[13px] font-medium text-white">Connected senders</div>
+              <div className="text-[13px] font-medium text-white">Discovered senders</div>
               <span className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.03] px-[10px] py-[3px] text-[10px] font-medium text-white/55">
                 {state.subscriptions.length}
               </span>
@@ -256,7 +287,7 @@ export default function IngestPage() {
               </div>
             ) : (
               <div className="rounded-lg border border-white/5 bg-white/[0.02] p-4 text-[12.5px] text-white/55">
-                Sender subscriptions will appear after the first successful sync.
+                Senders will appear after the first successful sync.
               </div>
             )}
           </div>
@@ -264,24 +295,23 @@ export default function IngestPage() {
           <div className="rounded-2xl border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0.02))] p-5 backdrop-blur-[14px]">
             <div className="mb-2 flex items-center gap-2 text-[13px] font-medium text-white">
               <Shield size={13} className="text-emerald-300" />
-              Privacy
+              How it works
             </div>
             <ul className="space-y-2 text-[12.5px] leading-relaxed text-white/65">
-              <li>• OAuth tokens remain encrypted server-side through AuthZ keystore.</li>
-              <li>• The browser only sees connection status and stored newsletter metadata.</li>
-              <li>• Manual paste and fake sample inboxes are intentionally removed.</li>
-            </ul>
-          </div>
-
-          <div className="rounded-2xl border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0.02))] p-5 backdrop-blur-[14px]">
-            <div className="mb-2 flex items-center gap-2 text-[13px] font-medium text-white">
-              <AlertCircle size={13} className="text-amber-200" />
-              Still missing
-            </div>
-            <ul className="space-y-2 text-[12.5px] leading-relaxed text-white/60">
-              <li>• Rule builder persistence for which senders or folders to ingest.</li>
-              <li>• One-off manual ingest flow.</li>
-              <li>• Per-newsletter review actions beyond sync and storage.</li>
+              {useSharedMailbox ? (
+                <>
+                  <li>• The shared mailbox <span className="font-mono text-[11px] text-violet-200">{state.systemStatus?.mailbox}</span> is read using app-only Microsoft Graph access.</li>
+                  <li>• No personal Microsoft login is needed to read articles.</li>
+                  <li>• All team members see the same article feed.</li>
+                  <li>• Login with Microsoft in Settings enables personal preferences and content generation.</li>
+                </>
+              ) : (
+                <>
+                  <li>• OAuth tokens are encrypted through the AuthZ keystore.</li>
+                  <li>• The browser only sees connection status and stored metadata.</li>
+                  <li>• Configure the shared mailbox for team-wide article access.</li>
+                </>
+              )}
             </ul>
           </div>
         </aside>
