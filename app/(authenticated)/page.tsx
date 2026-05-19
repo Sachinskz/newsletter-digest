@@ -2,35 +2,20 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import type { ComponentType, ReactNode } from "react";
+import type { ComponentType } from "react";
 import {
   Bolt,
   BriefcaseBusiness,
   ChevronRight,
-  CirclePlus,
   FileText,
   Inbox,
   Linkedin,
-  LoaderCircle,
   Mail,
   MessageSquareText,
-  RefreshCw,
-  Save,
-  Sparkles,
-  Tags,
-  TrendingUp,
 } from "lucide-react";
 import { deriveLibraryArticles } from "@/lib/editorial-intelligence";
 import { DEFAULT_SUMMARY_FORMAT, getSummaryFormatOption } from "@/lib/summarization";
-import type { NewsletterEmail, NewsletterPreferences, NewsletterSummary, RankingPriority, SummaryFormat } from "@/lib/types";
-
-interface ConnectionResponse {
-  connected: boolean;
-  accountEmail?: string;
-  accountName?: string;
-  status?: string;
-  lastSyncAt?: string;
-}
+import type { NewsletterEmail, NewsletterPreferences, NewsletterSummary, SummaryFormat } from "@/lib/types";
 
 interface SystemStatus {
   configured: boolean;
@@ -61,60 +46,56 @@ interface DashboardArticle {
 
 export default function DigestPage() {
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
-  const [connection, setConnection] = useState<ConnectionResponse | null>(null);
   const [preferences, setPreferences] = useState<PreferencesResponse | null>(null);
   const [newsletters, setNewsletters] = useState<NewsletterEmail[]>([]);
   const [summaries, setSummaries] = useState<NewsletterSummary[]>([]);
   const [loading, setLoading] = useState(true);
-  const [savingProfile, setSavingProfile] = useState(false);
-  const [profileMessage, setProfileMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  async function loadDashboard() {
+  async function loadDashboard(): Promise<SystemStatus | null> {
     setError(null);
     try {
-      const [systemStatusRes, statusRes, preferencesRes, newslettersRes, summariesRes] = await Promise.all([
+      const [systemStatusRes, preferencesRes, newslettersRes, summariesRes] = await Promise.all([
         fetch("/api/system/status"),
-        fetch("/api/oauth/status"),
         fetch("/api/preferences"),
         fetch("/api/newsletters"),
         fetch("/api/summaries"),
       ]);
 
       const systemStatusData = systemStatusRes.ok ? await systemStatusRes.json() : null;
-      const statusData = await statusRes.json();
-      const preferencesData = await preferencesRes.json();
-      const newslettersData = await newslettersRes.json();
-      const summariesData = await summariesRes.json();
-
-      if (!statusRes.ok) throw new Error(statusData.error || "Could not load connection status");
-      if (!preferencesRes.ok) throw new Error(preferencesData.error || "Could not load preferences");
-      if (!newslettersRes.ok) throw new Error(newslettersData.error || "Could not load newsletters");
-      if (!summariesRes.ok) throw new Error(summariesData.error || "Could not load summaries");
+      const preferencesData = preferencesRes.ok ? await preferencesRes.json() : null;
+      const newslettersData = newslettersRes.ok ? await newslettersRes.json() : { newsletters: [] };
+      const summariesData = summariesRes.ok ? await summariesRes.json() : { summaries: [] };
 
       setSystemStatus(systemStatusData);
-      setConnection(statusData);
       setPreferences(preferencesData);
       setNewsletters(newslettersData.newsletters || []);
       setSummaries(summariesData.summaries || []);
+      return systemStatusData;
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Dashboard failed to load");
+      return null;
     } finally {
       setLoading(false);
     }
   }
 
-  useEffect(() => {
-    void loadDashboard();
-  }, []);
+  async function autoSync() {
+    try {
+      const res = await fetch("/api/system/sync", { method: "POST" });
+      if (res.ok) await loadDashboard();
+    } catch {
+      // silent — dashboard will show whatever was already loaded
+    }
+  }
 
   useEffect(() => {
-    if (!loading) return;
-    const timer = window.setTimeout(() => {
-      setLoading(false);
-    }, 8000);
-    return () => window.clearTimeout(timer);
-  }, [loading]);
+    void loadDashboard().then((status) => {
+      if (status?.configured && status.articleCount === 0) {
+        void autoSync();
+      }
+    });
+  }, []);
 
   const articles = useMemo<DashboardArticle[]>(() => {
     return deriveLibraryArticles(newsletters, summaries, preferences?.preferences || null)
@@ -145,62 +126,33 @@ export default function DigestPage() {
   const summaryFormat = preferences?.summaryFormat || DEFAULT_SUMMARY_FORMAT;
   const formatOption = getSummaryFormatOption(summaryFormat);
   const pending = newsletters.filter((newsletter) => !newsletter.hasBeenSummarized);
-  const hasBriefingProfile = Boolean(preferences?.hasProfile);
 
-  const hasSource = systemStatus?.configured || connection?.connected;
+  const heroTitle = briefArticles[0]?.title || "Your AI brief is ready as soon as the first newsletters sync in.";
+  const heroSub = `The highest-signal newsletter updates are ranked here first, formatted as ${formatOption.title.toLowerCase()} for faster review.`;
 
-  const heroTitle = hasSource
-    ? briefArticles[0]?.title || "Your AI brief is ready as soon as the first newsletters sync in."
-    : "Set up an article source to turn your AI inbox into a daily executive brief.";
-
-  const heroSub = hasSource
-    ? `The highest-signal newsletter updates are ranked here first, formatted as ${formatOption.title.toLowerCase()} for faster review.`
-    : systemStatus?.configured === false
-      ? "Configure the shared mailbox or connect your personal Microsoft 365 to start syncing newsletters."
-      : "Once the article source is configured, this dashboard will fill with ranked newsletter stories automatically.";
+  if (loading) {
+    return (
+      <div className="grid grid-cols-12 gap-6 text-[#e7e9ee]">
+        <section className="col-span-12 lg:col-span-8">
+          <SkeletonCard className="h-[400px]" />
+        </section>
+        <section className="col-span-12 lg:col-span-4 flex flex-col gap-4">
+          <SkeletonCard className="h-[160px]" />
+          <SkeletonCard className="h-[200px]" />
+          <SkeletonCard className="h-[140px]" />
+        </section>
+        <section className="col-span-12">
+          <SkeletonCard className="h-[200px]" />
+        </section>
+      </div>
+    );
+  }
 
   return (
     <div className="grid grid-cols-12 gap-6 text-[#e7e9ee]">
-      {!loading && !hasBriefingProfile ? (
-        <section className="col-span-12">
-          <BriefingProfileCard
-            summaryFormat={summaryFormat}
-            saving={savingProfile}
-            onSave={async (profile) => {
-              setSavingProfile(true);
-              setProfileMessage(null);
-              setError(null);
-              try {
-                const res = await fetch("/api/preferences", {
-                  method: "PUT",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    summaryFormat,
-                    ...profile,
-                  }),
-                });
-                const data = await res.json();
-                if (!res.ok) throw new Error(data.error || "Could not save briefing profile");
-                setPreferences(data);
-                setProfileMessage("Your briefing profile is saved. The dashboard will now rank stories around your priorities.");
-              } catch (saveError) {
-                setError(saveError instanceof Error ? saveError.message : "Could not save briefing profile");
-              } finally {
-                setSavingProfile(false);
-              }
-            }}
-          />
-        </section>
-      ) : null}
-
       {error ? (
         <section className="col-span-12 rounded-xl border border-red-400/25 bg-red-400/10 px-4 py-3 text-sm text-red-100">
           {error}
-        </section>
-      ) : null}
-      {profileMessage ? (
-        <section className="col-span-12 rounded-xl border border-emerald-400/25 bg-emerald-400/10 px-4 py-3 text-sm text-emerald-100">
-          {profileMessage}
         </section>
       ) : null}
 
@@ -212,12 +164,10 @@ export default function DigestPage() {
               <div>
                 <div className="flex items-center gap-2 mb-2 flex-wrap">
                   <span className="inline-flex items-center gap-[6px] rounded-full border border-[#7c5cff]/35 bg-[#7c5cff]/12 px-[10px] py-[3px] text-[11px] font-medium text-[#cdbcff]">
-                    <Bolt size={11} /> Today's Brief
+                    <Bolt size={11} /> Today&apos;s Brief
                   </span>
                   <span className="text-[11px] text-white/40">
-                    {hasBriefingProfile
-                      ? `Ranked for ${preferences?.preferences?.roleTitle || preferences?.preferences?.primaryFocus || "your priorities"} · formatted for ${formatOption.title}`
-                      : `1-2 min read · formatted for ${formatOption.title}`}
+                    1-2 min read · formatted for {formatOption.title}
                   </span>
                 </div>
                 <h2 className="max-w-2xl text-[24px] font-semibold tracking-tight leading-snug bg-[linear-gradient(90deg,#c8b8ff,#8ee8ff)] bg-clip-text text-transparent">
@@ -242,7 +192,6 @@ export default function DigestPage() {
                         <div className="flex items-center gap-2 flex-wrap">
                           <span className={categoryChipClass(article.category)}>{article.category}</span>
                           <span className="text-[11px] text-white/40">{article.source}</span>
-                          {article.savedFormat ? <span className="text-[11px] text-white/32">{article.savedFormat}</span> : null}
                         </div>
                         <div className="text-[14px] font-medium mt-1 leading-snug text-white">{article.title}</div>
                         <div className="text-[12.5px] text-white/55 mt-1 leading-relaxed">
@@ -267,9 +216,7 @@ export default function DigestPage() {
                 ))
               ) : (
                 <li className="p-4 rounded-lg border border-white/5 bg-white/[0.02] text-[13px] text-white/55 leading-relaxed">
-                  {systemStatus?.configured
-                    ? "No articles yet. Head to the Ingest page and click Sync now to pull newsletters from the shared mailbox."
-                    : "No newsletters are stored yet. Configure the shared mailbox or connect Microsoft 365 and run a sync to see ranked stories."}
+                  No articles yet. Head to the Ingest page and click Sync now to pull newsletters from the shared mailbox.
                 </li>
               )}
             </ol>
@@ -279,8 +226,7 @@ export default function DigestPage() {
                 <FileText size={14} /> Open full brief
               </Link>
               <Link href="/settings" className="inline-flex items-center gap-2 rounded-[10px] border border-white/10 bg-white/[0.04] px-[14px] py-[8px] text-[13px] font-medium text-white transition hover:bg-white/[0.08]">
-                {hasSource ? <CirclePlus size={14} /> : <RefreshCw size={14} />}
-                {hasSource ? "Update format" : "Configure source"}
+                Update format
               </Link>
             </div>
           </div>
@@ -293,8 +239,8 @@ export default function DigestPage() {
           <div className="grid grid-cols-2 gap-2">
             <ActionTile icon={Linkedin} label="LinkedIn post" sub="From top story" href={briefArticles[0]?.href || "/library"} />
             <ActionTile icon={Mail} label="Format choice" sub={formatOption.title} href="/settings" />
-            <ActionTile icon={Inbox} label="Ingest" sub="Open queue" href="/ingest" />
-            <ActionTile icon={BriefcaseBusiness} label="Settings" sub="OAuth status" href="/settings" />
+            <ActionTile icon={Inbox} label="Ingest" sub="Sync articles" href="/ingest" />
+            <ActionTile icon={BriefcaseBusiness} label="Clients" sub="Match stories" href="/clients" />
           </div>
         </div>
 
@@ -366,217 +312,24 @@ export default function DigestPage() {
               chipLabel={preferences?.hasPreferences ? "saved" : "pending"}
             />
             <WorkflowCard
-              title="Ranking profile"
-              subtitle={hasBriefingProfile ? (preferences?.preferences?.roleTitle || preferences?.preferences?.primaryFocus || "Profile saved") : "Needs setup"}
-              body={
-                hasBriefingProfile
-                  ? "The brief is now weighted around your role, interests, and ranking priorities."
-                  : "Answer 5 quick questions so the app can rank stories around what matters most to you."
-              }
-              actionHref="/"
-              actionLabel={hasBriefingProfile ? "Review profile" : "Complete profile"}
-              chipLabel={hasBriefingProfile ? "ranked" : "needed"}
-            />
-            <WorkflowCard
-              title={systemStatus?.configured ? "Shared mailbox active" : connection?.connected ? "Microsoft 365 connected" : "Article source"}
-              subtitle={systemStatus?.configured ? (systemStatus.mailbox || "Shared mailbox") : connection?.connected ? (connection.accountEmail || "Connected source") : "Not configured"}
-              body={systemStatus?.configured ? "Articles are pulled from the shared mailbox using app-only authentication. All team members see the same feed." : connection?.connected ? "Your personal inbox syncs through Microsoft Graph." : "Configure the shared mailbox or connect personal Microsoft 365 to start syncing."}
-              actionHref={systemStatus?.configured ? "/ingest" : "/settings"}
-              actionLabel={systemStatus?.configured ? "Open ingest" : connection?.connected ? "Connection details" : "Open settings"}
-              chipLabel={systemStatus?.configured ? "shared" : connection?.connected ? "personal" : "needed"}
+              title={systemStatus?.configured ? "Shared mailbox" : "Article source"}
+              subtitle={systemStatus?.configured ? (systemStatus.mailbox || "Active") : "Pending setup"}
+              body={systemStatus?.configured ? "Articles are pulled from the shared mailbox. All team members see the same feed." : "The shared mailbox needs to be configured to start syncing articles."}
+              actionHref="/ingest"
+              actionLabel="Open ingest"
+              chipLabel={systemStatus?.configured ? "active" : "needed"}
             />
             <WorkflowCard
               title="Needs summary"
-              subtitle={`${pending.length} newsletter${pending.length === 1 ? "" : "s"} waiting`}
-              body={pending.length > 0 ? "These newsletters are already stored and ready for summarization." : "Nothing is waiting right now. New synced newsletters will queue here."}
+              subtitle={`${pending.length} article${pending.length === 1 ? "" : "s"} waiting`}
+              body={pending.length > 0 ? "These articles are stored and ready for summarization." : "Nothing is waiting. New synced articles will queue here."}
               actionHref="/library"
               actionLabel="Open queue"
-              chipLabel={pending.length > 0 ? `match ${pending.length}` : "clear"}
+              chipLabel={pending.length > 0 ? `${pending.length} pending` : "clear"}
             />
           </div>
         </div>
       </section>
-
-      {loading ? (
-        <section className="col-span-12 text-[12px] text-white/45">Loading dashboard...</section>
-      ) : null}
-    </div>
-  );
-}
-
-const RANKING_PRIORITY_OPTIONS: RankingPriority[] = [
-  "Revenue opportunities",
-  "Client relevance",
-  "Competitive moves",
-  "Risk and regulation",
-  "Tools we can deploy quickly",
-];
-
-const ROLE_OPTIONS = [
-  "Founder / CEO",
-  "Sales / Account Executive",
-  "Marketing / Content Lead",
-  "AI Operations Lead",
-  "Product / Strategy Lead",
-] as const;
-
-const FOCUS_OPTIONS = [
-  "Winning more clients",
-  "Improving delivery for existing clients",
-  "Finding product and market opportunities",
-  "Operationalizing AI internally",
-  "Tracking risk, governance, and compliance",
-] as const;
-
-const INTEREST_OPTIONS = [
-  "AI agents and automation",
-  "Enterprise buying signals",
-  "Industry-specific client use cases",
-  "Regulation and compliance",
-  "Tools we can adopt quickly",
-] as const;
-
-const WANTS_TO_KNOW_OPTIONS = [
-  "What should I talk to clients about this week?",
-  "Which trends are becoming revenue opportunities?",
-  "What will matter operationally in the next 30 days?",
-  "Which competitive moves should we react to early?",
-  "What can we deploy quickly with the least friction?",
-] as const;
-
-function BriefingProfileCard({
-  summaryFormat,
-  saving,
-  onSave,
-}: {
-  summaryFormat: SummaryFormat;
-  saving: boolean;
-  onSave: (profile: {
-    roleTitle: string;
-    primaryFocus: string;
-    interests: string[];
-    wantsToKnow: string;
-    rankingPriorities: RankingPriority[];
-  }) => Promise<void>;
-}) {
-  const [roleTitle, setRoleTitle] = useState<(typeof ROLE_OPTIONS)[number] | "">("");
-  const [primaryFocus, setPrimaryFocus] = useState<(typeof FOCUS_OPTIONS)[number] | "">("");
-  const [interests, setInterests] = useState<(typeof INTEREST_OPTIONS)[number] | "">("");
-  const [wantsToKnow, setWantsToKnow] = useState<(typeof WANTS_TO_KNOW_OPTIONS)[number] | "">("");
-  const [rankingPriority, setRankingPriority] = useState<RankingPriority | "">("");
-
-  const isComplete = Boolean(roleTitle && primaryFocus && interests && wantsToKnow && rankingPriority);
-
-  async function handleSubmit() {
-    if (!isComplete) return;
-    await onSave({
-      roleTitle,
-      primaryFocus,
-      interests: [interests],
-      wantsToKnow,
-      rankingPriorities: [rankingPriority as RankingPriority],
-    });
-  }
-
-  return (
-    <div className="rounded-2xl border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.05),rgba(255,255,255,0.02))] backdrop-blur-[14px] p-6">
-      <div className="flex items-start justify-between gap-4 mb-5">
-        <div>
-          <div className="inline-flex items-center gap-[6px] rounded-full border border-[#2cd0ff]/30 bg-[#2cd0ff]/10 px-[10px] py-[3px] text-[11px] font-medium text-[#b1e9ff]">
-            <Tags size={11} />
-            Briefing profile
-          </div>
-          <h2 className="mt-3 text-[20px] font-semibold text-white">Answer 5 quick questions so we can rank the brief for you</h2>
-          <p className="mt-2 max-w-3xl text-[13px] leading-relaxed text-white/62">
-            This shapes what rises to the top first. Your current summary format stays set to {getSummaryFormatOption(summaryFormat).title.toLowerCase()}.
-          </p>
-        </div>
-      </div>
-
-      <div className="grid gap-4 md:grid-cols-2">
-        <Question label="1. What's your role or title?">
-          <SingleChoiceOptions
-            options={ROLE_OPTIONS}
-            value={roleTitle}
-            onChange={(value) => setRoleTitle(value as (typeof ROLE_OPTIONS)[number])}
-          />
-        </Question>
-        <Question label="2. What's your primary focus right now?">
-          <SingleChoiceOptions
-            options={FOCUS_OPTIONS}
-            value={primaryFocus}
-            onChange={(value) => setPrimaryFocus(value as (typeof FOCUS_OPTIONS)[number])}
-          />
-        </Question>
-        <Question label="3. Which topics are you most interested in?">
-          <SingleChoiceOptions
-            options={INTEREST_OPTIONS}
-            value={interests}
-            onChange={(value) => setInterests(value as (typeof INTEREST_OPTIONS)[number])}
-          />
-        </Question>
-        <Question label="4. What do you want to understand better?">
-          <SingleChoiceOptions
-            options={WANTS_TO_KNOW_OPTIONS}
-            value={wantsToKnow}
-            onChange={(value) => setWantsToKnow(value as (typeof WANTS_TO_KNOW_OPTIONS)[number])}
-          />
-        </Question>
-      </div>
-
-      <Question label="5. What matters most when we rank stories?">
-        <SingleChoiceOptions
-          options={RANKING_PRIORITY_OPTIONS}
-          value={rankingPriority}
-          onChange={(value) => setRankingPriority(value as RankingPriority)}
-        />
-        <div className="mt-2 text-[11px] text-white/42">Pick the one thing that should influence ranking the most.</div>
-      </Question>
-
-      <div className="mt-5 flex items-center justify-between gap-4 border-t border-white/5 pt-5">
-        <div className="text-[12px] text-white/46">Choose one answer for each question. You can refine the profile later if your priorities change.</div>
-        <button className="inline-flex items-center gap-2 rounded-[10px] border border-[#7c5cff]/60 bg-[linear-gradient(135deg,#7c5cff,#5b3df5)] px-[14px] py-[8px] text-[13px] font-medium text-white shadow-[0_6px_24px_-8px_rgba(124,92,255,.6)] disabled:cursor-not-allowed disabled:opacity-55" type="button" onClick={handleSubmit} disabled={saving || !isComplete}>
-          {saving ? <LoaderCircle size={14} className="animate-spin" /> : <Save size={14} />}
-          {saving ? "Saving..." : isComplete ? "Save ranking profile" : "Answer all 5 questions"}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function Question({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <label className="block">
-      <div className="mb-2 text-[12px] font-medium text-white/82">{label}</div>
-      {children}
-    </label>
-  );
-}
-
-function SingleChoiceOptions({
-  options,
-  value,
-  onChange,
-}: {
-  options: readonly string[];
-  value: string;
-  onChange: (value: string) => void;
-}) {
-  return (
-    <div className="flex flex-wrap gap-2">
-      {options.map((option) => {
-        const selected = value === option;
-        return (
-          <button
-            key={option}
-            type="button"
-            onClick={() => onChange(option)}
-            className={`analyst-chip cursor-pointer text-left transition ${selected ? "analyst-chip-accent" : "opacity-85 hover:opacity-100"}`}
-          >
-            {option}
-          </button>
-        );
-      })}
     </div>
   );
 }
@@ -636,6 +389,44 @@ function WorkflowCard({
           <MessageSquareText size={12} />
           {actionLabel}
         </Link>
+      </div>
+    </div>
+  );
+}
+
+function SkeletonCard({ className = "" }: { className?: string }) {
+  return (
+    <div className={`rounded-2xl border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0.02))] p-6 ${className}`}>
+      <div className="animate-pulse space-y-4">
+        <div className="flex items-center gap-3">
+          <div className="h-5 w-24 rounded-full bg-white/[0.06]" />
+          <div className="h-3 w-36 rounded bg-white/[0.04]" />
+        </div>
+        <div className="h-6 w-3/4 rounded bg-white/[0.06]" />
+        <div className="h-4 w-full rounded bg-white/[0.04]" />
+        <div className="space-y-3 pt-2">
+          <div className="flex gap-3 items-center">
+            <div className="w-7 h-7 rounded-md bg-white/[0.06]" />
+            <div className="flex-1 space-y-1.5">
+              <div className="h-3 w-20 rounded bg-white/[0.05]" />
+              <div className="h-4 w-3/4 rounded bg-white/[0.04]" />
+            </div>
+          </div>
+          <div className="flex gap-3 items-center">
+            <div className="w-7 h-7 rounded-md bg-white/[0.06]" />
+            <div className="flex-1 space-y-1.5">
+              <div className="h-3 w-24 rounded bg-white/[0.05]" />
+              <div className="h-4 w-2/3 rounded bg-white/[0.04]" />
+            </div>
+          </div>
+          <div className="flex gap-3 items-center">
+            <div className="w-7 h-7 rounded-md bg-white/[0.06]" />
+            <div className="flex-1 space-y-1.5">
+              <div className="h-3 w-16 rounded bg-white/[0.05]" />
+              <div className="h-4 w-1/2 rounded bg-white/[0.04]" />
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );

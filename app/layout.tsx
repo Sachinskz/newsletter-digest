@@ -68,7 +68,28 @@ export default function RootLayout({
             tokenExpiresOverrideMs={tokenExpiresOverrideMs}
             silentRefreshUrl={silentRefreshUrl}
           >
-            <CustomizationProvider apiEndpoint={customizationEndpoint}>
+            <CustomizationProvider
+              apiEndpoint={customizationEndpoint}
+              initialCustomization={{
+                companyName: "Busibox",
+                siteName: "Newsletter Digest",
+                slogan: "AI-powered briefings",
+                primaryColor: "#ea580c",
+                secondaryColor: "#c2410c",
+                textColor: "#FFFFFF",
+                logoUrl: null,
+                faviconUrl: null,
+                addressLine1: "",
+                addressLine2: null,
+                addressCity: null,
+                addressState: "",
+                addressZip: null,
+                addressCountry: "",
+                supportEmail: null,
+                supportPhone: null,
+                customCss: null,
+              }}
+            >
               {children}
               <VersionBar />
             </CustomizationProvider>

@@ -1,17 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { AlertCircle, Check, Inbox, Link2, LoaderCircle, Mail, RefreshCw, Shield } from "lucide-react";
+import { Inbox, LoaderCircle, RefreshCw, Shield } from "lucide-react";
 import type { NewsletterEmail, NewsletterSubscription } from "@/lib/types";
-
-interface ConnectionResponse {
-  connected: boolean;
-  accountEmail?: string;
-  accountName?: string;
-  status?: string;
-  lastSyncAt?: string;
-  accessTokenExpiresAt?: string;
-}
 
 interface SystemStatus {
   configured: boolean;
@@ -23,7 +14,6 @@ interface SystemStatus {
 
 interface LoadState {
   systemStatus: SystemStatus | null;
-  connection: ConnectionResponse | null;
   subscriptions: NewsletterSubscription[];
   newsletters: NewsletterEmail[];
 }
@@ -31,7 +21,6 @@ interface LoadState {
 export default function IngestPage() {
   const [state, setState] = useState<LoadState>({
     systemStatus: null,
-    connection: null,
     subscriptions: [],
     newsletters: [],
   });
@@ -40,39 +29,42 @@ export default function IngestPage() {
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
-  async function loadState() {
+  async function loadState(): Promise<SystemStatus | null> {
     setError(null);
     try {
-      const [systemStatusRes, connectionRes, subscriptionsRes, newslettersRes] = await Promise.all([
+      const [systemStatusRes, subscriptionsRes, newslettersRes] = await Promise.all([
         fetch("/api/system/status"),
-        fetch("/api/oauth/status"),
         fetch("/api/subscriptions"),
         fetch("/api/newsletters"),
       ]);
 
-      const [systemStatus, connection, subscriptionsData, newslettersData] = await Promise.all([
+      const [systemStatus, subscriptionsData, newslettersData] = await Promise.all([
         systemStatusRes.ok ? systemStatusRes.json() : null,
-        connectionRes.json(),
         subscriptionsRes.json(),
         newslettersRes.json(),
       ]);
 
       setState({
         systemStatus,
-        connection: connectionRes.ok ? connection : null,
         subscriptions: subscriptionsData.subscriptions || [],
         newsletters: newslettersData.newsletters || [],
       });
+      return systemStatus;
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Could not load ingest status");
-      setState({ systemStatus: null, connection: null, subscriptions: [], newsletters: [] });
+      setState({ systemStatus: null, subscriptions: [], newsletters: [] });
+      return null;
     } finally {
       setLoading(false);
     }
   }
 
   useEffect(() => {
-    void loadState();
+    void loadState().then((status) => {
+      if (status?.configured && status.articleCount === 0) {
+        void syncNow();
+      }
+    });
   }, []);
 
   function showToast(message: string) {
@@ -84,9 +76,7 @@ export default function IngestPage() {
     setSyncing(true);
     setError(null);
     try {
-      const useShared = state.systemStatus?.configured;
-      const endpoint = useShared ? "/api/system/sync" : "/api/newsletters/sync";
-      const res = await fetch(endpoint, { method: "POST" });
+      const res = await fetch("/api/system/sync", { method: "POST" });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Sync failed");
       await loadState();
@@ -98,8 +88,6 @@ export default function IngestPage() {
     }
   }
 
-  const useSharedMailbox = state.systemStatus?.configured;
-
   const pendingCount = useMemo(
     () => state.newsletters.filter((item) => !item.hasBeenSummarized).length,
     [state.newsletters],
@@ -109,120 +97,78 @@ export default function IngestPage() {
     [state.newsletters],
   );
 
+  if (loading) {
+    return (
+      <div className="grid grid-cols-12 gap-6 text-[#e7e9ee]">
+        <section className="col-span-12 lg:col-span-8 space-y-5">
+          <SkeletonCard className="h-[200px]" />
+          <SkeletonCard className="h-[320px]" />
+        </section>
+        <aside className="col-span-12 space-y-4 lg:col-span-4">
+          <SkeletonCard className="h-[260px]" />
+          <SkeletonCard className="h-[140px]" />
+        </aside>
+      </div>
+    );
+  }
+
   return (
     <>
       <div className="grid grid-cols-12 gap-6 text-[#e7e9ee]">
         <section className="col-span-12 lg:col-span-8 space-y-5">
-          {/* Shared mailbox / connection card */}
+          {/* Source card */}
           <div className="relative overflow-hidden rounded-2xl border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0.03))] p-6">
             <div className="pointer-events-none absolute inset-0 rounded-2xl [background:linear-gradient(135deg,rgba(124,92,255,.6),rgba(44,208,255,.3),transparent_60%)] [mask:linear-gradient(#000_0_0)_content-box,linear-gradient(#000_0_0)] [-webkit-mask:linear-gradient(#000_0_0)_content-box,linear-gradient(#000_0_0)] [mask-composite:exclude] [-webkit-mask-composite:xor] p-px" />
-            {loading ? (
-              <div className="relative text-[13px] text-white/55">Loading source configuration...</div>
-            ) : useSharedMailbox ? (
-              <div className="relative">
-                <div className="flex items-start gap-4">
-                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-violet-400/25 bg-violet-500/[0.12]">
-                    <Inbox size={22} className="text-violet-200" />
+            <div className="relative">
+              <div className="flex items-start gap-4">
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-violet-400/25 bg-violet-500/[0.12]">
+                  <Inbox size={22} className="text-violet-200" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-[16px] font-semibold text-white">
+                      {state.systemStatus?.mailbox || "Shared mailbox"}
+                    </span>
+                    <span className="inline-flex items-center gap-[6px] rounded-full border border-emerald-400/30 bg-emerald-400/10 px-[10px] py-[3px] text-[11px] font-medium text-emerald-200">
+                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-300" />
+                      {state.systemStatus?.configured ? "Active" : "Pending setup"}
+                    </span>
                   </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-[16px] font-semibold text-white">{state.systemStatus?.mailbox}</span>
-                      <span className="inline-flex items-center gap-[6px] rounded-full border border-emerald-400/30 bg-emerald-400/10 px-[10px] py-[3px] text-[11px] font-medium text-emerald-200">
-                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-300" />
-                        Shared mailbox
-                      </span>
-                    </div>
-                    <div className="mt-1 text-[12.5px] text-white/55">
-                      Microsoft Graph · app-only auth · read-only · last sync {state.systemStatus?.lastSyncAt ? new Date(state.systemStatus.lastSyncAt).toLocaleString() : "never"}
-                    </div>
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      <button className="ingest-btn-primary" type="button" onClick={syncNow} disabled={syncing}>
-                        {syncing ? <LoaderCircle size={13} className="animate-spin" /> : <RefreshCw size={13} />}
-                        {syncing ? "Syncing..." : "Sync now"}
-                      </button>
-                    </div>
+                  <div className="mt-1 text-[12.5px] text-white/55">
+                    Microsoft Graph · app-only auth · read-only · last sync {state.systemStatus?.lastSyncAt ? new Date(state.systemStatus.lastSyncAt).toLocaleString() : "never"}
                   </div>
-                  <div className="hidden shrink-0 flex-col items-end md:flex">
-                    <div className="text-[11px] uppercase tracking-wider text-white/40">Articles</div>
-                    <div className="text-[22px] font-semibold leading-tight text-white">{state.newsletters.length}</div>
-                    <div className="text-[11px] text-white/40">stored</div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button className="ingest-btn-primary" type="button" onClick={syncNow} disabled={syncing}>
+                      {syncing ? <LoaderCircle size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+                      {syncing ? "Syncing..." : "Sync now"}
+                    </button>
                   </div>
                 </div>
+                <div className="hidden shrink-0 flex-col items-end md:flex">
+                  <div className="text-[11px] uppercase tracking-wider text-white/40">Articles</div>
+                  <div className="text-[22px] font-semibold leading-tight text-white">{state.newsletters.length}</div>
+                  <div className="text-[11px] text-white/40">stored</div>
+                </div>
+              </div>
 
-                <div className="mt-5 grid grid-cols-2 gap-3 border-t border-white/5 pt-5 md:grid-cols-4">
-                  <Metric label="Senders" value={state.subscriptions.length} />
-                  <Metric label="Articles" value={state.newsletters.length} accent />
-                  <Metric label="Pending" value={pendingCount} />
-                  <Metric label="Summarized" value={summarizedCount} />
-                </div>
+              <div className="mt-5 grid grid-cols-2 gap-3 border-t border-white/5 pt-5 md:grid-cols-4">
+                <Metric label="Senders" value={state.subscriptions.length} />
+                <Metric label="Articles" value={state.newsletters.length} accent />
+                <Metric label="Pending" value={pendingCount} />
+                <Metric label="Summarized" value={summarizedCount} />
               </div>
-            ) : !state.connection?.connected ? (
-              <div className="relative flex items-start gap-4">
-                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04]">
-                  <Mail size={22} />
-                </div>
-                <div className="flex-1">
-                  <div className="text-[16px] font-semibold text-white">No article source configured</div>
-                  <p className="mt-1.5 text-[13px] leading-relaxed text-white/60">
-                    The shared mailbox is not yet configured. Ask your administrator to set <code className="rounded bg-white/10 px-1 py-0.5 text-[11.5px] font-mono text-violet-200">MS_TENANT_ID</code> and <code className="rounded bg-white/10 px-1 py-0.5 text-[11.5px] font-mono text-violet-200">MS_SHARED_MAILBOX</code> environment variables, or connect your personal Microsoft 365 inbox below.
-                  </p>
-                  <a
-                    href="/api/oauth/authorize"
-                    className="mt-4 inline-flex items-center gap-2 rounded-[10px] border border-white/20 bg-white/[0.06] px-[14px] py-[8px] text-[13px] font-medium text-white/80 hover:bg-white/[0.10]"
-                  >
-                    <Mail size={14} />
-                    Connect personal Microsoft 365
-                  </a>
-                </div>
-              </div>
-            ) : (
-              <div className="relative">
-                <div className="flex items-start gap-4">
-                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04]">
-                    <Mail size={22} />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-[16px] font-semibold text-white">{state.connection.accountEmail || "Microsoft 365 inbox"}</span>
-                      <span className="inline-flex items-center gap-[6px] rounded-full border border-amber-300/30 bg-amber-300/10 px-[10px] py-[3px] text-[11px] font-medium text-amber-100">
-                        Personal fallback
-                      </span>
-                    </div>
-                    <div className="mt-1 text-[12.5px] text-white/55">
-                      Using your personal Microsoft connection. Configure the shared mailbox for team-wide access.
-                    </div>
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      <button className="ingest-btn-primary" type="button" onClick={syncNow} disabled={syncing}>
-                        {syncing ? <LoaderCircle size={13} className="animate-spin" /> : <RefreshCw size={13} />}
-                        {syncing ? "Syncing..." : "Sync now"}
-                      </button>
-                    </div>
-                  </div>
-                  <div className="hidden shrink-0 flex-col items-end md:flex">
-                    <div className="text-[11px] uppercase tracking-wider text-white/40">Stored</div>
-                    <div className="text-[22px] font-semibold leading-tight text-white">{state.newsletters.length}</div>
-                    <div className="text-[11px] text-white/40">newsletters</div>
-                  </div>
-                </div>
-                <div className="mt-5 grid grid-cols-2 gap-3 border-t border-white/5 pt-5 md:grid-cols-4">
-                  <Metric label="Senders" value={state.subscriptions.length} />
-                  <Metric label="Stored" value={state.newsletters.length} accent />
-                  <Metric label="Pending" value={pendingCount} />
-                  <Metric label="Summarized" value={summarizedCount} />
-                </div>
-              </div>
-            )}
+            </div>
           </div>
 
-          {/* Stored newsletters list */}
+          {/* Stored articles list */}
           <div className="rounded-2xl border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0.02))] p-5 backdrop-blur-[14px]">
             <div className="mb-3 flex items-center justify-between">
               <div>
                 <div className="text-[14px] font-medium text-white">Stored articles</div>
                 <div className="text-[12px] text-white/50">
-                  {useSharedMailbox
-                    ? `Articles from ${state.systemStatus?.mailbox}, available to all team members.`
-                    : "Newsletter emails stored in data-api."}
+                  {state.systemStatus?.mailbox
+                    ? `Articles from ${state.systemStatus.mailbox}, available to all team members.`
+                    : "Articles synced from the shared mailbox."}
                 </div>
               </div>
             </div>
@@ -250,9 +196,7 @@ export default function IngestPage() {
               </div>
             ) : (
               <div className="rounded-lg border border-white/5 bg-white/[0.02] p-4 text-[12.5px] text-white/55">
-                {useSharedMailbox
-                  ? "No articles yet. Click Sync now to pull newsletters from the shared mailbox."
-                  : "No newsletters stored yet. Connect a source and run the first sync."}
+                No articles yet. Click Sync now to pull newsletters from the shared mailbox.
               </div>
             )}
           </div>
@@ -298,20 +242,10 @@ export default function IngestPage() {
               How it works
             </div>
             <ul className="space-y-2 text-[12.5px] leading-relaxed text-white/65">
-              {useSharedMailbox ? (
-                <>
-                  <li>• The shared mailbox <span className="font-mono text-[11px] text-violet-200">{state.systemStatus?.mailbox}</span> is read using app-only Microsoft Graph access.</li>
-                  <li>• No personal Microsoft login is needed to read articles.</li>
-                  <li>• All team members see the same article feed.</li>
-                  <li>• Login with Microsoft in Settings enables personal preferences and content generation.</li>
-                </>
-              ) : (
-                <>
-                  <li>• OAuth tokens are encrypted through the AuthZ keystore.</li>
-                  <li>• The browser only sees connection status and stored metadata.</li>
-                  <li>• Configure the shared mailbox for team-wide article access.</li>
-                </>
-              )}
+              <li>• Articles are pulled from the shared mailbox using app-only Microsoft Graph access.</li>
+              <li>• No personal Microsoft login is needed to read articles.</li>
+              <li>• All team members see the same article feed.</li>
+              <li>• Each article is automatically summarized by the AI analyst agent.</li>
             </ul>
           </div>
         </aside>
@@ -337,6 +271,28 @@ function Metric({ label, value, accent }: { label: string; value: number; accent
     <div className={`rounded-lg border p-3 ${accent ? "border-violet-400/20 bg-violet-500/[0.08]" : "border-white/5 bg-white/[0.02]"}`}>
       <div className="text-[11px] uppercase tracking-wider text-white/40">{label}</div>
       <div className="mt-1 text-[20px] font-semibold leading-none text-white">{value}</div>
+    </div>
+  );
+}
+
+function SkeletonCard({ className = "" }: { className?: string }) {
+  return (
+    <div className={`rounded-2xl border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0.02))] p-6 ${className}`}>
+      <div className="animate-pulse space-y-4">
+        <div className="flex items-center gap-4">
+          <div className="h-12 w-12 rounded-xl bg-white/[0.06]" />
+          <div className="flex-1 space-y-2">
+            <div className="h-4 w-48 rounded bg-white/[0.06]" />
+            <div className="h-3 w-72 rounded bg-white/[0.04]" />
+          </div>
+        </div>
+        <div className="grid grid-cols-4 gap-3">
+          <div className="h-16 rounded-lg bg-white/[0.04]" />
+          <div className="h-16 rounded-lg bg-white/[0.04]" />
+          <div className="h-16 rounded-lg bg-white/[0.04]" />
+          <div className="h-16 rounded-lg bg-white/[0.04]" />
+        </div>
+      </div>
     </div>
   );
 }
