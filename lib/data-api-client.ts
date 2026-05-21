@@ -31,9 +31,9 @@ export const APP_ID = "newsletter-digest";
 export const DOCUMENTS = {
   CONNECTIONS: "newsletter-digest-connections",
   LINKEDIN_CONNECTIONS: "newsletter-digest-linkedin-connections",
-  SUBSCRIPTIONS: "newsletter-digest-subscriptions",
-  EMAILS: "newsletter-digest-emails",
-  SUMMARIES: "newsletter-digest-summaries",
+  SUBSCRIPTIONS: "newsletter-digest-feed-subscriptions",
+  EMAILS: "newsletter-digest-feed-emails",
+  SUMMARIES: "newsletter-digest-feed-summaries",
   PREFERENCES: "newsletter-digest-preferences",
   GENERATED_CONTENT: "newsletter-digest-generated-content",
   CLIENTS: "newsletter-digest-clients",

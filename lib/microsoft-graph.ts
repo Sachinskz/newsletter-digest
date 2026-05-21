@@ -10,9 +10,18 @@ export async function getMicrosoftProfile(accessToken: string): Promise<Microsof
 export async function listRecentMessages(
   accessToken: string,
   limit = 50,
+  options?: { receivedAfter?: string },
 ): Promise<GraphMessageListItem[]> {
   const select = ["id", "subject", "receivedDateTime", "from", "bodyPreview"].join(",");
-  const path = `/me/mailFolders/inbox/messages?$top=${limit}&$orderby=receivedDateTime desc&$select=${select}`;
+  const params = new URLSearchParams({
+    $top: String(limit),
+    $orderby: "receivedDateTime desc",
+    $select: select,
+  });
+  if (options?.receivedAfter) {
+    params.set("$filter", `receivedDateTime ge ${options.receivedAfter}`);
+  }
+  const path = `/me/mailFolders/inbox/messages?${params.toString()}`;
   const data = await graphFetch<{ value?: GraphMessageListItem[] }>(accessToken, path);
   return data.value ?? [];
 }
@@ -29,9 +38,18 @@ export async function listSharedMailboxMessages(
   accessToken: string,
   mailbox: string,
   limit = 50,
+  options?: { receivedAfter?: string },
 ): Promise<GraphMessageListItem[]> {
   const select = ["id", "subject", "receivedDateTime", "from", "bodyPreview"].join(",");
-  const path = `/users/${encodeURIComponent(mailbox)}/mailFolders/inbox/messages?$top=${limit}&$orderby=receivedDateTime desc&$select=${select}`;
+  const params = new URLSearchParams({
+    $top: String(limit),
+    $orderby: "receivedDateTime desc",
+    $select: select,
+  });
+  if (options?.receivedAfter) {
+    params.set("$filter", `receivedDateTime ge ${options.receivedAfter}`);
+  }
+  const path = `/users/${encodeURIComponent(mailbox)}/mailFolders/inbox/messages?${params.toString()}`;
   const data = await graphFetch<{ value?: GraphMessageListItem[] }>(accessToken, path);
   return data.value ?? [];
 }

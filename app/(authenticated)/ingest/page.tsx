@@ -12,6 +12,16 @@ interface SystemStatus {
   lastSyncAt: string | null;
 }
 
+interface SyncResponse {
+  inserted?: number;
+  summarized?: number;
+  totals?: {
+    articleCount: number;
+    subscriptionCount: number;
+    lastSyncAt: string | null;
+  };
+}
+
 interface LoadState {
   systemStatus: SystemStatus | null;
   subscriptions: NewsletterSubscription[];
@@ -69,10 +79,26 @@ export default function IngestPage() {
     setError(null);
     try {
       const res = await fetch("/api/system/sync", { method: "POST" });
-      const data = await res.json();
+      const data = await res.json() as SyncResponse & { error?: string };
       if (!res.ok) throw new Error(data.error || "Sync failed");
-      await loadState();
+
+      setState((current) => ({
+        ...current,
+        systemStatus: current.systemStatus
+          ? {
+              ...current.systemStatus,
+              articleCount: data.totals?.articleCount ?? current.systemStatus.articleCount + (data.inserted ?? 0),
+              subscriptionCount: data.totals?.subscriptionCount ?? current.systemStatus.subscriptionCount,
+              lastSyncAt: data.totals?.lastSyncAt ?? new Date().toISOString(),
+            }
+          : current.systemStatus,
+      }));
+
       showToast(`Synced ${data.inserted ?? 0} new articles`);
+      void loadState();
+      window.setTimeout(() => {
+        void loadState();
+      }, 1500);
     } catch (syncError) {
       setError(syncError instanceof Error ? syncError.message : "Sync failed");
     } finally {

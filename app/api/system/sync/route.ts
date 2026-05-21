@@ -5,6 +5,7 @@ import {
   ensureDataDocuments,
   getEmailByMessageId,
   listEmails,
+  listSubscriptions,
   insertEmail,
   markEmailSummarized,
   upsertSubscriptionFromEmail,
@@ -17,11 +18,12 @@ import { acquireAppOnlyTokenWithCredentials, isSharedMailboxConfiguredFromEnv, l
 import type { NewsletterEmail, NewsletterSummary } from "@/lib/types";
 
 const MESSAGE_LIST_LIMIT = readPositiveInt("NEWSLETTER_SYNC_FETCH_LIMIT", 15);
-const MAX_DETAIL_CHECKS_PER_SYNC = readPositiveInt("NEWSLETTER_SYNC_MAX_DETAIL_CHECKS", 8);
-const MAX_NEW_NEWSLETTERS_PER_SYNC = readPositiveInt("NEWSLETTER_SYNC_MAX_NEW", 1);
-const MAX_BACKFILLS_PER_SYNC = readPositiveInt("NEWSLETTER_SYNC_MAX_BACKFILL", 1);
+const MAX_DETAIL_CHECKS_PER_SYNC = readPositiveInt("NEWSLETTER_SYNC_MAX_DETAIL_CHECKS", 6);
+const MAX_NEW_NEWSLETTERS_PER_SYNC = readPositiveInt("NEWSLETTER_SYNC_MAX_NEW", 3);
+const MAX_BACKFILLS_PER_SYNC = readPositiveInt("NEWSLETTER_SYNC_MAX_BACKFILL", 2);
 const GRAPH_TIMEOUT_MS = readPositiveInt("NEWSLETTER_SYNC_GRAPH_TIMEOUT_MS", 10_000);
-const SUMMARY_TIMEOUT_MS = readPositiveInt("NEWSLETTER_SYNC_SUMMARY_TIMEOUT_MS", 12_000);
+const SUMMARY_TIMEOUT_MS = readPositiveInt("NEWSLETTER_SYNC_SUMMARY_TIMEOUT_MS", 6_000);
+const MAX_MESSAGE_AGE_DAYS = readPositiveInt("NEWSLETTER_SYNC_MAX_AGE_DAYS", 7);
 
 export async function POST(request: NextRequest) {
   const dataAuth = await requireAuthWithTokenExchange(request, "data-api");
@@ -92,11 +94,12 @@ export async function POST(request: NextRequest) {
 
   const ids = await ensureDataDocuments(dataAuth.apiToken);
   const summaryFormat = DEFAULT_SUMMARY_FORMAT;
+  const receivedAfter = new Date(Date.now() - MAX_MESSAGE_AGE_DAYS * 24 * 60 * 60 * 1000).toISOString();
 
   let messages: Awaited<ReturnType<typeof listSharedMailboxMessages>>;
   try {
     messages = await withTimeout(
-      listSharedMailboxMessages(appToken, creds.sharedMailbox, MESSAGE_LIST_LIMIT),
+      listSharedMailboxMessages(appToken, creds.sharedMailbox, MESSAGE_LIST_LIMIT, { receivedAfter }),
       GRAPH_TIMEOUT_MS,
       `Graph inbox list exceeded ${GRAPH_TIMEOUT_MS}ms`,
     );
@@ -122,6 +125,7 @@ export async function POST(request: NextRequest) {
   let skippedExisting = 0;
   let detailFailures = 0;
   let reachedSyncCap = false;
+  let tooOldSkipped = 0;
 
   for (const item of messages.slice(0, MAX_DETAIL_CHECKS_PER_SYNC)) {
     scanned += 1;
@@ -139,6 +143,15 @@ export async function POST(request: NextRequest) {
         error: error instanceof Error ? error.message : String(error),
       });
       continue;
+    }
+
+    if (detail.receivedDateTime) {
+      const receivedTs = new Date(detail.receivedDateTime).getTime();
+      const cutoffTs = Date.now() - MAX_MESSAGE_AGE_DAYS * 24 * 60 * 60 * 1000;
+      if (Number.isFinite(receivedTs) && receivedTs < cutoffTs) {
+        tooOldSkipped += 1;
+        continue;
+      }
     }
 
     if (!isNewsletter(detail)) continue;
@@ -192,6 +205,12 @@ export async function POST(request: NextRequest) {
     summarized += 1;
   }
 
+  const latestEmails = await listEmails(dataAuth.apiToken, ids.emails);
+  const latestSubscriptions = await listSubscriptions(dataAuth.apiToken, ids.subscriptions);
+  const lastSyncAt = latestEmails.length > 0
+    ? latestEmails.reduce((latest, email) => (email.fetchedAt > latest ? email.fetchedAt : latest), latestEmails[0].fetchedAt)
+    : null;
+
   return NextResponse.json({
     source: "shared-mailbox",
     mailbox: creds.sharedMailbox,
@@ -203,10 +222,18 @@ export async function POST(request: NextRequest) {
     summaryFailures,
     detailFailures,
     skippedExisting,
+    tooOldSkipped,
     reachedSyncCap,
     fetchWindow: MESSAGE_LIST_LIMIT,
     detailChecksPerSync: MAX_DETAIL_CHECKS_PER_SYNC,
     maxNewPerSync: MAX_NEW_NEWSLETTERS_PER_SYNC,
+    maxBackfillPerSync: MAX_BACKFILLS_PER_SYNC,
+    maxMessageAgeDays: MAX_MESSAGE_AGE_DAYS,
+    totals: {
+      articleCount: latestEmails.length,
+      subscriptionCount: latestSubscriptions.length,
+      lastSyncAt,
+    },
   });
 }
 
