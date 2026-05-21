@@ -37,4 +37,13 @@ describe("config api url resolution", () => {
 
     expect(getConfigApiUrl()).toBe("http://clymates-mac-studio.tail6d901e.ts.net:8012");
   });
+
+  it("maps internal Busibox service hosts to config-api instead of reusing authz-api", () => {
+    delete process.env.CONFIG_API_URL;
+    delete process.env.CONFIG_API_HOST;
+    delete process.env.CONFIG_API_PORT;
+    process.env.AUTHZ_BASE_URL = "http://authz-api:8010";
+
+    expect(getConfigApiUrl()).toBe("http://config-api:8012");
+  });
 });

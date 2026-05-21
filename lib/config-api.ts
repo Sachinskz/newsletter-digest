@@ -15,11 +15,20 @@ function normalizeBaseUrl(url: string): string {
   return url.replace(/\/+$/, "");
 }
 
+function mapServiceHostToConfigHost(hostname: string): string {
+  if (hostname === "authz-api" || hostname === "data-api" || hostname === "agent-api" || hostname === "search-api") {
+    return "config-api";
+  }
+
+  return hostname;
+}
+
 function siblingServiceUrl(input: string | undefined, port: string): string | null {
   if (!input) return null;
 
   try {
     const parsed = new URL(input);
+    parsed.hostname = mapServiceHostToConfigHost(parsed.hostname);
     parsed.port = port;
     return parsed.origin;
   } catch {
