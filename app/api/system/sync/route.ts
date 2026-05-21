@@ -62,7 +62,22 @@ export async function POST(request: NextRequest) {
   const ids = await ensureDataDocuments(dataAuth.apiToken);
   const summaryFormat = DEFAULT_SUMMARY_FORMAT;
 
-  const messages = await listSharedMailboxMessages(appToken, creds.sharedMailbox, 50);
+  let messages: Awaited<ReturnType<typeof listSharedMailboxMessages>>;
+  try {
+    messages = await listSharedMailboxMessages(appToken, creds.sharedMailbox, 50);
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error("[system/sync] Graph API error:", msg);
+    const is403 = msg.includes("403");
+    return NextResponse.json(
+      {
+        error: is403
+          ? "Access denied reading shared mailbox. The Azure app needs Mail.Read Application permission with admin consent."
+          : `Microsoft Graph error: ${msg}`,
+      },
+      { status: 502 },
+    );
+  }
 
   let scanned = 0;
   let detected = 0;
