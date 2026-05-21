@@ -13,7 +13,7 @@ import { getSharedMailboxMessageDetail, listSharedMailboxMessages } from "@/lib/
 import { isNewsletter } from "@/lib/newsletter-detection";
 import { normalizeEmailText } from "@/lib/html-to-text";
 import { buildFallbackSummary, DEFAULT_SUMMARY_FORMAT, requestNewsletterSummary } from "@/lib/summarization";
-import { acquireAppOnlyTokenWithCredentials, isSharedMailboxConfiguredFromEnv, loadSharedMailboxCredentials } from "@/lib/ms-config";
+import { acquireAppOnlyTokenWithCredentials, isSharedMailboxConfiguredFromEnv, loadSharedMailboxCredentialsWithDiagnostics } from "@/lib/ms-config";
 import type { NewsletterEmail, NewsletterSummary } from "@/lib/types";
 
 export async function POST(request: NextRequest) {
@@ -35,15 +35,39 @@ export async function POST(request: NextRequest) {
       }
     : null;
 
+  let configError: string | null = null;
+  let configApiUrl: string | null = null;
+  let missingKeys: string[] = [];
+
   if (!creds && dataAuth.ssoToken) {
     console.log("[system/sync] Falling back to Config API for credentials...");
-    creds = await loadSharedMailboxCredentials(dataAuth.userId, dataAuth.ssoToken);
+    const configResult = await loadSharedMailboxCredentialsWithDiagnostics(dataAuth.userId, dataAuth.ssoToken);
+    creds = configResult.credentials;
+    configError = configResult.error;
+    configApiUrl = configResult.configApiUrl;
+    missingKeys = configResult.missingKeys;
     console.log("[system/sync] Config API result:", creds ? "credentials loaded" : "no credentials found");
   }
 
   if (!creds) {
+    if (configError) {
+      return NextResponse.json(
+        {
+          error: "Shared mailbox config could not be loaded from Config API.",
+          details: configError,
+          configApiUrl,
+          missingKeys,
+        },
+        { status: 502 },
+      );
+    }
+
     return NextResponse.json(
-      { error: "Shared mailbox is not configured. Set MS_TENANT_ID and MS_SHARED_MAILBOX in env or Config API." },
+      {
+        error: "Shared mailbox is not configured. Save all Microsoft shared mailbox credentials in Settings or supply them via env.",
+        configApiUrl,
+        missingKeys,
+      },
       { status: 503 },
     );
   }

@@ -1,4 +1,4 @@
-import { getConfigApiToken, getAppConfigRaw } from "@jazzmind/busibox-app/lib";
+import { getAppConfigRaw, getConfigApiToken, getConfigApiUrl } from "@/lib/config-api";
 
 const APP_ID = process.env.APP_NAME || "newsletter-digest";
 const MS_CONFIG_KEYS = ["MS_CLIENT_ID", "MS_CLIENT_SECRET", "MS_TENANT_ID", "MS_SHARED_MAILBOX"] as const;
@@ -8,6 +8,14 @@ export interface SharedMailboxCredentials {
   clientSecret: string;
   tenantId: string;
   sharedMailbox: string;
+}
+
+export interface SharedMailboxCredentialLookupResult {
+  credentials: SharedMailboxCredentials | null;
+  source: "env" | "config-api" | "missing";
+  configApiUrl: string | null;
+  missingKeys: string[];
+  error: string | null;
 }
 
 function fromEnv(): SharedMailboxCredentials | null {
@@ -25,23 +33,35 @@ export function isSharedMailboxConfiguredFromEnv(): boolean {
   return fromEnv() !== null;
 }
 
-export async function loadSharedMailboxCredentials(
+export async function loadSharedMailboxCredentialsWithDiagnostics(
   userId: string,
   sessionJwt: string,
-): Promise<SharedMailboxCredentials | null> {
+): Promise<SharedMailboxCredentialLookupResult> {
   const envCreds = fromEnv();
-  if (envCreds) return envCreds;
+  if (envCreds) {
+    return {
+      credentials: envCreds,
+      source: "env",
+      configApiUrl: null,
+      missingKeys: [],
+      error: null,
+    };
+  }
+
+  const configApiUrl = getConfigApiUrl();
 
   try {
-    console.log("[ms-config] Attempting Config API lookup for user:", userId);
+    console.log("[ms-config] Attempting Config API lookup for user:", userId, "via", configApiUrl);
     const configToken = await getConfigApiToken(userId, sessionJwt);
     console.log("[ms-config] Got config-api token, fetching keys...");
     const values: Record<string, string> = {};
+    const missingKeys: string[] = [];
     for (const key of MS_CONFIG_KEYS) {
       try {
         values[key] = await getAppConfigRaw(configToken, APP_ID, key);
         console.log(`[ms-config] ${key}: loaded`);
       } catch (keyError) {
+        missingKeys.push(key);
         console.warn(`[ms-config] ${key}: not found -`, keyError instanceof Error ? keyError.message : keyError);
       }
     }
@@ -51,17 +71,45 @@ export async function loadSharedMailboxCredentials(
 
     if (hasAll) {
       return {
-        clientId: values.MS_CLIENT_ID,
-        clientSecret: values.MS_CLIENT_SECRET,
-        tenantId: values.MS_TENANT_ID,
-        sharedMailbox: values.MS_SHARED_MAILBOX,
+        credentials: {
+          clientId: values.MS_CLIENT_ID,
+          clientSecret: values.MS_CLIENT_SECRET,
+          tenantId: values.MS_TENANT_ID,
+          sharedMailbox: values.MS_SHARED_MAILBOX,
+        },
+        source: "config-api",
+        configApiUrl,
+        missingKeys: [],
+        error: null,
       };
     }
-  } catch (error) {
-    console.error("[ms-config] Config API lookup failed:", error instanceof Error ? error.message : error);
-  }
 
-  return null;
+    return {
+      credentials: null,
+      source: "missing",
+      configApiUrl,
+      missingKeys,
+      error: null,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("[ms-config] Config API lookup failed:", message);
+    return {
+      credentials: null,
+      source: "missing",
+      configApiUrl,
+      missingKeys: [...MS_CONFIG_KEYS],
+      error: message,
+    };
+  }
+}
+
+export async function loadSharedMailboxCredentials(
+  userId: string,
+  sessionJwt: string,
+): Promise<SharedMailboxCredentials | null> {
+  const result = await loadSharedMailboxCredentialsWithDiagnostics(userId, sessionJwt);
+  return result.credentials;
 }
 
 export async function acquireAppOnlyTokenWithCredentials(creds: SharedMailboxCredentials): Promise<string> {

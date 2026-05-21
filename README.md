@@ -29,12 +29,17 @@ Newsletter Digest is a Busibox app that connects a user's Microsoft 365 mailbox,
 | Content Generator | Multi-format AI content generation from articles |
 | Settings | Microsoft connection, LinkedIn connection, summary format preference |
 
-## Required Environment Variables
+## Runtime Configuration
 
 ```bash
+# Optional direct env path
 MS_CLIENT_ID=<azure-app-client-id>
 MS_CLIENT_SECRET=<from Azure app registration>
+MS_TENANT_ID=<azure-tenant-id>
+MS_SHARED_MAILBOX=<shared-mailbox@example.com>
 MS_REDIRECT_URI=http://localhost:3002/api/oauth/callback
+
+# Optional LinkedIn direct env path
 LINKEDIN_CLIENT_ID=<linkedin-app-client-id>
 LINKEDIN_CLIENT_SECRET=<from LinkedIn app configuration>
 LINKEDIN_REDIRECT_URI=http://localhost:3002/api/linkedin/callback
@@ -46,6 +51,13 @@ For production deployment behind the Busibox app path:
 MS_REDIRECT_URI=https://<busibox-domain>/newsletter-digest/api/oauth/callback
 LINKEDIN_REDIRECT_URI=https://<busibox-domain>/newsletter-digest/api/linkedin/callback
 ```
+
+The app can now run in two modes:
+
+1. Direct env vars: the Microsoft shared mailbox values are injected as process env vars.
+2. Config API: the shared mailbox values are saved from the Settings page and loaded at runtime for the whole app.
+
+For the Config API path, the app resolves `config-api` from `CONFIG_API_URL` when present, otherwise it derives the host from the existing Busibox service URLs such as `AUTHZ_BASE_URL`, `DATA_API_URL`, or `AGENT_API_URL`.
 
 The app also uses the standard Busibox template environment for SSO, data-api, agent-api, and AuthZ token exchange.
 
@@ -128,15 +140,16 @@ LinkedIn publishing uses the official LinkedIn OAuth + Posts API path. V1 is int
 
 ## Core Flow
 
-1. Open Settings and connect Microsoft 365 (requires registered redirect URI and client secret).
-2. OAuth callback exchanges the code for tokens, encrypts via AuthZ keystore.
-3. Click Sync from Dashboard or Ingest page.
-4. Sync fetches latest 50 inbox messages, detects newsletters, normalizes HTML, dedupes, stores.
-5. Article Library shows scored articles with search, filter, and sort.
-6. Generate a summary from any article using your preferred format.
-7. Open Content Generator from an article to create LinkedIn posts, emails, etc.
-8. Connect LinkedIn from Settings if you want direct publishing instead of copy/paste.
-9. Generated drafts are persisted, shown in Recent Drafts, and LinkedIn drafts can be published directly from the stored draft record.
+1. Open Settings and either connect Microsoft 365 personally or save shared mailbox credentials for team-wide sync.
+2. OAuth callback exchanges delegated user tokens and encrypts them via AuthZ keystore when personal Microsoft login is used.
+3. Shared mailbox credentials can be stored in Config API so the app can sync without per-user Microsoft login.
+4. Click Sync from Dashboard or Ingest page.
+5. Sync fetches latest 50 inbox messages, detects newsletters, normalizes HTML, dedupes, stores.
+6. Article Library shows scored articles with search, filter, and sort.
+7. Generate a summary from any article using your preferred format.
+8. Open Content Generator from an article to create LinkedIn posts, emails, etc.
+9. Connect LinkedIn from Settings if you want direct publishing instead of copy/paste.
+10. Generated drafts are persisted, shown in Recent Drafts, and LinkedIn drafts can be published directly from the stored draft record.
 
 ## Development
 

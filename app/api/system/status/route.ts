@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAuthWithTokenExchange } from "@/lib/auth-middleware";
 import { ensureDataDocuments, listEmails, listSubscriptions } from "@/lib/data-api-client";
-import { isSharedMailboxConfiguredFromEnv, loadSharedMailboxCredentials } from "@/lib/ms-config";
+import { isSharedMailboxConfiguredFromEnv, loadSharedMailboxCredentialsWithDiagnostics } from "@/lib/ms-config";
 
 export async function GET(request: NextRequest) {
   const auth = await requireAuthWithTokenExchange(request, "data-api");
@@ -9,12 +9,18 @@ export async function GET(request: NextRequest) {
 
   let configured = isSharedMailboxConfiguredFromEnv();
   let mailbox = process.env.MS_SHARED_MAILBOX || null;
+  let configIssue: string | null = null;
+  let configApiUrl: string | null = null;
+  let missingKeys: string[] = [];
 
   if (!configured && auth.ssoToken) {
-    const creds = await loadSharedMailboxCredentials(auth.userId, auth.ssoToken);
-    if (creds) {
+    const result = await loadSharedMailboxCredentialsWithDiagnostics(auth.userId, auth.ssoToken);
+    configApiUrl = result.configApiUrl;
+    missingKeys = result.missingKeys;
+    configIssue = result.error;
+    if (result.credentials) {
       configured = true;
-      mailbox = creds.sharedMailbox;
+      mailbox = result.credentials.sharedMailbox;
     }
   }
 
@@ -22,6 +28,9 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       configured: false,
       mailbox: null,
+      configApiUrl,
+      configIssue,
+      missingKeys,
       articleCount: 0,
       subscriptionCount: 0,
       lastSyncAt: null,
@@ -39,6 +48,9 @@ export async function GET(request: NextRequest) {
   return NextResponse.json({
     configured: true,
     mailbox,
+    configApiUrl,
+    configIssue,
+    missingKeys,
     articleCount: emails.length,
     subscriptionCount: subscriptions.length,
     lastSyncAt,
