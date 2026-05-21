@@ -23,7 +23,10 @@ export async function POST(request: NextRequest) {
   const agentAuth = await requireAuthWithTokenExchange(request, "agent-api");
   if (agentAuth instanceof NextResponse) return agentAuth;
 
-  let creds = isSharedMailboxConfiguredFromEnv()
+  const envConfigured = isSharedMailboxConfiguredFromEnv();
+  console.log("[system/sync] Env configured:", envConfigured, "| ssoToken present:", Boolean(dataAuth.ssoToken));
+
+  let creds = envConfigured
     ? {
         clientId: process.env.MS_CLIENT_ID!,
         clientSecret: process.env.MS_CLIENT_SECRET!,
@@ -33,7 +36,9 @@ export async function POST(request: NextRequest) {
     : null;
 
   if (!creds && dataAuth.ssoToken) {
+    console.log("[system/sync] Falling back to Config API for credentials...");
     creds = await loadSharedMailboxCredentials(dataAuth.userId, dataAuth.ssoToken);
+    console.log("[system/sync] Config API result:", creds ? "credentials loaded" : "no credentials found");
   }
 
   if (!creds) {

@@ -33,17 +33,23 @@ export async function loadSharedMailboxCredentials(
   if (envCreds) return envCreds;
 
   try {
+    console.log("[ms-config] Attempting Config API lookup for user:", userId);
     const configToken = await getConfigApiToken(userId, sessionJwt);
+    console.log("[ms-config] Got config-api token, fetching keys...");
     const values: Record<string, string> = {};
     for (const key of MS_CONFIG_KEYS) {
       try {
         values[key] = await getAppConfigRaw(configToken, APP_ID, key);
-      } catch {
-        // key not set in config-api
+        console.log(`[ms-config] ${key}: loaded`);
+      } catch (keyError) {
+        console.warn(`[ms-config] ${key}: not found -`, keyError instanceof Error ? keyError.message : keyError);
       }
     }
 
-    if (values.MS_CLIENT_ID && values.MS_CLIENT_SECRET && values.MS_TENANT_ID && values.MS_SHARED_MAILBOX) {
+    const hasAll = values.MS_CLIENT_ID && values.MS_CLIENT_SECRET && values.MS_TENANT_ID && values.MS_SHARED_MAILBOX;
+    console.log("[ms-config] Keys present:", Object.keys(values).join(", "), "| complete:", Boolean(hasAll));
+
+    if (hasAll) {
       return {
         clientId: values.MS_CLIENT_ID,
         clientSecret: values.MS_CLIENT_SECRET,
@@ -52,7 +58,7 @@ export async function loadSharedMailboxCredentials(
       };
     }
   } catch (error) {
-    console.error("[ms-config] Config API lookup failed, falling back to env:", error);
+    console.error("[ms-config] Config API lookup failed:", error instanceof Error ? error.message : error);
   }
 
   return null;
