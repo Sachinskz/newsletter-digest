@@ -1,14 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAuthWithTokenExchange } from "@/lib/auth-middleware";
 import { ensureDataDocuments, listEmails, listSubscriptions } from "@/lib/data-api-client";
-import { isSharedMailboxConfigured } from "@/lib/microsoft-oauth";
+import { isSharedMailboxConfiguredFromEnv, loadSharedMailboxCredentials } from "@/lib/ms-config";
 
 export async function GET(request: NextRequest) {
   const auth = await requireAuthWithTokenExchange(request, "data-api");
   if (auth instanceof NextResponse) return auth;
 
-  const configured = isSharedMailboxConfigured();
-  const mailbox = process.env.MS_SHARED_MAILBOX || null;
+  let configured = isSharedMailboxConfiguredFromEnv();
+  let mailbox = process.env.MS_SHARED_MAILBOX || null;
+
+  if (!configured && auth.ssoToken) {
+    const creds = await loadSharedMailboxCredentials(auth.userId, auth.ssoToken);
+    if (creds) {
+      configured = true;
+      mailbox = creds.sharedMailbox;
+    }
+  }
 
   if (!configured) {
     return NextResponse.json({

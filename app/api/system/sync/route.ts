@@ -9,32 +9,43 @@ import {
   markEmailSummarized,
   upsertSubscriptionFromEmail,
 } from "@/lib/data-api-client";
-import { acquireAppOnlyToken, getSharedMailboxConfig, isSharedMailboxConfigured } from "@/lib/microsoft-oauth";
 import { getSharedMailboxMessageDetail, listSharedMailboxMessages } from "@/lib/microsoft-graph";
 import { isNewsletter } from "@/lib/newsletter-detection";
 import { normalizeEmailText } from "@/lib/html-to-text";
 import { buildFallbackSummary, DEFAULT_SUMMARY_FORMAT, requestNewsletterSummary } from "@/lib/summarization";
+import { acquireAppOnlyTokenWithCredentials, isSharedMailboxConfiguredFromEnv, loadSharedMailboxCredentials } from "@/lib/ms-config";
 import type { NewsletterEmail, NewsletterSummary } from "@/lib/types";
 
 export async function POST(request: NextRequest) {
-  if (!isSharedMailboxConfigured()) {
-    return NextResponse.json(
-      { error: "Shared mailbox is not configured. Set MS_TENANT_ID and MS_SHARED_MAILBOX." },
-      { status: 503 },
-    );
-  }
-
   const dataAuth = await requireAuthWithTokenExchange(request, "data-api");
   if (dataAuth instanceof NextResponse) return dataAuth;
 
   const agentAuth = await requireAuthWithTokenExchange(request, "agent-api");
   if (agentAuth instanceof NextResponse) return agentAuth;
 
-  const { sharedMailbox } = getSharedMailboxConfig();
+  let creds = isSharedMailboxConfiguredFromEnv()
+    ? {
+        clientId: process.env.MS_CLIENT_ID!,
+        clientSecret: process.env.MS_CLIENT_SECRET!,
+        tenantId: process.env.MS_TENANT_ID!,
+        sharedMailbox: process.env.MS_SHARED_MAILBOX!,
+      }
+    : null;
+
+  if (!creds && dataAuth.ssoToken) {
+    creds = await loadSharedMailboxCredentials(dataAuth.userId, dataAuth.ssoToken);
+  }
+
+  if (!creds) {
+    return NextResponse.json(
+      { error: "Shared mailbox is not configured. Set MS_TENANT_ID and MS_SHARED_MAILBOX in env or Config API." },
+      { status: 503 },
+    );
+  }
 
   let appToken: string;
   try {
-    appToken = await acquireAppOnlyToken();
+    appToken = await acquireAppOnlyTokenWithCredentials(creds);
   } catch (error) {
     console.error("[system/sync] Failed to acquire app-only token:", error);
     return NextResponse.json(
@@ -46,7 +57,7 @@ export async function POST(request: NextRequest) {
   const ids = await ensureDataDocuments(dataAuth.apiToken);
   const summaryFormat = DEFAULT_SUMMARY_FORMAT;
 
-  const messages = await listSharedMailboxMessages(appToken, sharedMailbox, 50);
+  const messages = await listSharedMailboxMessages(appToken, creds.sharedMailbox, 50);
 
   let scanned = 0;
   let detected = 0;
@@ -57,7 +68,7 @@ export async function POST(request: NextRequest) {
 
   for (const item of messages) {
     scanned += 1;
-    const detail = await getSharedMailboxMessageDetail(appToken, sharedMailbox, item.id);
+    const detail = await getSharedMailboxMessageDetail(appToken, creds.sharedMailbox, item.id);
     if (!isNewsletter(detail)) continue;
     detected += 1;
 
@@ -106,7 +117,7 @@ export async function POST(request: NextRequest) {
 
   return NextResponse.json({
     source: "shared-mailbox",
-    mailbox: sharedMailbox,
+    mailbox: creds.sharedMailbox,
     scanned,
     detected,
     inserted,

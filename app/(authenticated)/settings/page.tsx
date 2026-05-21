@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState, type ReactNode } from "react";
-import { Check, KeyRound, Linkedin, LoaderCircle, MailCheck, ShieldCheck, SlidersHorizontal } from "lucide-react";
+import { Check, Inbox, KeyRound, Linkedin, LoaderCircle, MailCheck, ShieldCheck, SlidersHorizontal } from "lucide-react";
 import { DEFAULT_SUMMARY_FORMAT, getSummaryFormatOption, SUMMARY_FORMAT_OPTIONS } from "@/lib/summarization";
 import type { NewsletterPreferences, SummaryFormat } from "@/lib/types";
 
@@ -44,18 +44,24 @@ export default function SettingsPage() {
   const [disconnectingLinkedIn, setDisconnectingLinkedIn] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [sharedMailboxConfig, setSharedMailboxConfig] = useState<Record<string, string>>({});
+  const [msForm, setMsForm] = useState({ MS_CLIENT_ID: "", MS_CLIENT_SECRET: "", MS_TENANT_ID: "", MS_SHARED_MAILBOX: "" });
+  const [savingMs, setSavingMs] = useState(false);
+  const [msMessage, setMsMessage] = useState<string | null>(null);
 
   async function loadSettings() {
     setError(null);
     try {
-      const [microsoftRes, linkedInRes, preferencesRes] = await Promise.all([
+      const [microsoftRes, linkedInRes, preferencesRes, msConfigRes] = await Promise.all([
         fetch("/api/oauth/status"),
         fetch("/api/linkedin/status"),
         fetch("/api/preferences"),
+        fetch("/api/system/config"),
       ]);
       const microsoftData = await microsoftRes.json();
       const linkedInData = await linkedInRes.json();
       const preferencesData = await preferencesRes.json();
+      const msConfigData = msConfigRes.ok ? await msConfigRes.json() : { keys: {} };
 
       if (!microsoftRes.ok) throw new Error(microsoftData.error || "Could not load Microsoft connection");
       if (!linkedInRes.ok) throw new Error(linkedInData.error || "Could not load LinkedIn connection");
@@ -63,6 +69,7 @@ export default function SettingsPage() {
 
       setMicrosoftConnection(microsoftData);
       setLinkedInConnection(linkedInData);
+      setSharedMailboxConfig(msConfigData.keys || {});
       setPreferences(preferencesData);
       setSelectedFormat(preferencesData.summaryFormat || DEFAULT_SUMMARY_FORMAT);
     } catch (loadError) {
@@ -295,6 +302,83 @@ export default function SettingsPage() {
                 </button>
               );
             })}
+          </div>
+        </div>
+
+        <div className="analyst-glass rounded-2xl p-5">
+          <div className="mb-4 flex items-start justify-between gap-4">
+            <div>
+              <div className="mb-2 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-[10px] py-[3px] text-[11px] font-medium text-white/55">
+                <Inbox size={12} />
+                Shared Mailbox
+              </div>
+              <div className="text-[16px] font-semibold text-white">Shared mailbox credentials</div>
+              <p className="mt-1.5 max-w-2xl text-[13px] leading-relaxed text-white/60">
+                Configure the Azure AD app registration credentials for reading the shared mailbox. These are stored encrypted in the Config API and used by all team members.
+              </p>
+            </div>
+            <span className={`analyst-chip ${Object.values(sharedMailboxConfig).every((v) => v === "configured") ? "analyst-chip-good" : "analyst-chip-warn"}`}>
+              {Object.values(sharedMailboxConfig).every((v) => v === "configured") ? "Configured" : "Needs setup"}
+            </span>
+          </div>
+
+          <div className="space-y-3 border-t border-white/5 pt-4">
+            {(["MS_CLIENT_ID", "MS_TENANT_ID", "MS_SHARED_MAILBOX", "MS_CLIENT_SECRET"] as const).map((key) => (
+              <div key={key}>
+                <div className="mb-1 flex items-center justify-between">
+                  <label htmlFor={key} className="text-[12px] font-medium text-white/70">{key}</label>
+                  {sharedMailboxConfig[key] === "configured" ? (
+                    <span className="text-[10px] text-emerald-300">configured</span>
+                  ) : (
+                    <span className="text-[10px] text-amber-300">missing</span>
+                  )}
+                </div>
+                <input
+                  id={key}
+                  type={key === "MS_CLIENT_SECRET" ? "password" : "text"}
+                  className="analyst-input w-full"
+                  placeholder={key === "MS_SHARED_MAILBOX" ? "newsletters@maigent.ai" : key === "MS_TENANT_ID" ? "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" : ""}
+                  value={msForm[key]}
+                  onChange={(e) => setMsForm((prev) => ({ ...prev, [key]: e.target.value }))}
+                />
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-4 flex items-center gap-3">
+            <button
+              className="analyst-btn analyst-btn-primary"
+              type="button"
+              disabled={savingMs || !Object.values(msForm).some((v) => v.trim())}
+              onClick={async () => {
+                setSavingMs(true);
+                setMsMessage(null);
+                setError(null);
+                try {
+                  const body = Object.fromEntries(
+                    Object.entries(msForm).filter(([, v]) => v.trim()),
+                  );
+                  const res = await fetch("/api/system/config", {
+                    method: "PUT",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(body),
+                  });
+                  const data = await res.json();
+                  if (!res.ok) throw new Error(data.error || "Failed to save");
+                  setMsMessage("Shared mailbox credentials saved. Go to Ingest and click Sync.");
+                  setMsForm({ MS_CLIENT_ID: "", MS_CLIENT_SECRET: "", MS_TENANT_ID: "", MS_SHARED_MAILBOX: "" });
+                  await loadSettings();
+                } catch (saveError) {
+                  setError(saveError instanceof Error ? saveError.message : "Failed to save credentials");
+                } finally {
+                  setSavingMs(false);
+                }
+              }}
+            >
+              {savingMs ? <LoaderCircle size={13} className="animate-spin" /> : null}
+              {savingMs ? "Saving..." : "Save credentials"}
+            </button>
+            {msMessage ? <span className="text-[12px] text-emerald-300">{msMessage}</span> : null}
           </div>
         </div>
 
