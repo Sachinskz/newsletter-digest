@@ -16,6 +16,13 @@ import { buildFallbackSummary, DEFAULT_SUMMARY_FORMAT, requestNewsletterSummary 
 import { acquireAppOnlyTokenWithCredentials, isSharedMailboxConfiguredFromEnv, loadSharedMailboxCredentialsWithDiagnostics } from "@/lib/ms-config";
 import type { NewsletterEmail, NewsletterSummary } from "@/lib/types";
 
+const MESSAGE_LIST_LIMIT = readPositiveInt("NEWSLETTER_SYNC_FETCH_LIMIT", 15);
+const MAX_DETAIL_CHECKS_PER_SYNC = readPositiveInt("NEWSLETTER_SYNC_MAX_DETAIL_CHECKS", 8);
+const MAX_NEW_NEWSLETTERS_PER_SYNC = readPositiveInt("NEWSLETTER_SYNC_MAX_NEW", 1);
+const MAX_BACKFILLS_PER_SYNC = readPositiveInt("NEWSLETTER_SYNC_MAX_BACKFILL", 1);
+const GRAPH_TIMEOUT_MS = readPositiveInt("NEWSLETTER_SYNC_GRAPH_TIMEOUT_MS", 10_000);
+const SUMMARY_TIMEOUT_MS = readPositiveInt("NEWSLETTER_SYNC_SUMMARY_TIMEOUT_MS", 12_000);
+
 export async function POST(request: NextRequest) {
   const dataAuth = await requireAuthWithTokenExchange(request, "data-api");
   if (dataAuth instanceof NextResponse) return dataAuth;
@@ -88,7 +95,11 @@ export async function POST(request: NextRequest) {
 
   let messages: Awaited<ReturnType<typeof listSharedMailboxMessages>>;
   try {
-    messages = await listSharedMailboxMessages(appToken, creds.sharedMailbox, 50);
+    messages = await withTimeout(
+      listSharedMailboxMessages(appToken, creds.sharedMailbox, MESSAGE_LIST_LIMIT),
+      GRAPH_TIMEOUT_MS,
+      `Graph inbox list exceeded ${GRAPH_TIMEOUT_MS}ms`,
+    );
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     console.error("[system/sync] Graph API error:", msg);
@@ -109,10 +120,27 @@ export async function POST(request: NextRequest) {
   let summarized = 0;
   let summaryFailures = 0;
   let skippedExisting = 0;
+  let detailFailures = 0;
+  let reachedSyncCap = false;
 
-  for (const item of messages) {
+  for (const item of messages.slice(0, MAX_DETAIL_CHECKS_PER_SYNC)) {
     scanned += 1;
-    const detail = await getSharedMailboxMessageDetail(appToken, creds.sharedMailbox, item.id);
+    let detail;
+    try {
+      detail = await withTimeout(
+        getSharedMailboxMessageDetail(appToken, creds.sharedMailbox, item.id),
+        GRAPH_TIMEOUT_MS,
+        `Graph message detail exceeded ${GRAPH_TIMEOUT_MS}ms`,
+      );
+    } catch (error) {
+      detailFailures += 1;
+      console.error("[system/sync] Skipping message detail after failure:", {
+        messageId: item.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      continue;
+    }
+
     if (!isNewsletter(detail)) continue;
     detected += 1;
 
@@ -145,10 +173,15 @@ export async function POST(request: NextRequest) {
     await markEmailSummarized(dataAuth.apiToken, ids.emails, email.id, summary.id);
     summarized += 1;
     inserted += 1;
+
+    if (inserted >= MAX_NEW_NEWSLETTERS_PER_SYNC) {
+      reachedSyncCap = true;
+      break;
+    }
   }
 
   const backlog = await listEmails(dataAuth.apiToken, ids.emails, { summaryStatus: "unsummarized" });
-  for (const email of backlog) {
+  for (const email of backlog.slice(0, MAX_BACKFILLS_PER_SYNC)) {
     const output = buildFallbackSummary(email, summaryFormat);
     const summary = await createSummary(dataAuth.apiToken, ids.summaries, email.id, output, summaryFormat, {
       generationSource: "fallback",
@@ -162,12 +195,18 @@ export async function POST(request: NextRequest) {
   return NextResponse.json({
     source: "shared-mailbox",
     mailbox: creds.sharedMailbox,
+    fetchedCandidates: messages.length,
     scanned,
     detected,
     inserted,
     summarized,
     summaryFailures,
+    detailFailures,
     skippedExisting,
+    reachedSyncCap,
+    fetchWindow: MESSAGE_LIST_LIMIT,
+    detailChecksPerSync: MAX_DETAIL_CHECKS_PER_SYNC,
+    maxNewPerSync: MAX_NEW_NEWSLETTERS_PER_SYNC,
   });
 }
 
@@ -178,7 +217,11 @@ async function summarizeWithMetadata(
   onFallback: (error: unknown) => void,
 ) {
   try {
-    const output = await requestNewsletterSummary(agentToken, email, summaryFormat);
+    const output = await withTimeout(
+      requestNewsletterSummary(agentToken, email, summaryFormat),
+      SUMMARY_TIMEOUT_MS,
+      `Summary generation exceeded ${SUMMARY_TIMEOUT_MS}ms`,
+    );
     return {
       output,
       metadata: {
@@ -202,5 +245,26 @@ async function summarizeWithMetadata(
         generationError: errorMessage,
       } satisfies Pick<NewsletterSummary, "generationSource" | "generationModel" | "generationError">,
     };
+  }
+}
+
+function readPositiveInt(key: string, fallback: number): number {
+  const raw = process.env[key];
+  const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timeoutId: NodeJS.Timeout | undefined;
+
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timeoutId = setTimeout(() => reject(new Error(message)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
   }
 }
