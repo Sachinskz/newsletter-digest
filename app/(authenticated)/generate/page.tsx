@@ -91,7 +91,7 @@ export default function GeneratePage() {
         const summariesData = await summariesRes.json();
         const contentData = await contentRes.json();
         const clientsData = await clientsRes.json();
-        const linkedInStatusData = await linkedInStatusRes.json();
+        const linkedInStatusData = linkedInStatusRes.ok ? await linkedInStatusRes.json() : null;
         const preferencesData = (await preferencesRes.json()) as PreferencesResponse;
 
         if (!alive) return;
