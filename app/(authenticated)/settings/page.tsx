@@ -58,20 +58,18 @@ export default function SettingsPage() {
         fetch("/api/preferences"),
         fetch("/api/system/config"),
       ]);
-      const microsoftData = await microsoftRes.json();
-      const linkedInData = await linkedInRes.json();
-      const preferencesData = await preferencesRes.json();
+      const microsoftData = microsoftRes.ok ? await microsoftRes.json() : null;
+      const linkedInData = linkedInRes.ok ? await linkedInRes.json() : null;
+      const preferencesData = preferencesRes.ok ? await preferencesRes.json() : null;
       const msConfigData = msConfigRes.ok ? await msConfigRes.json() : { keys: {} };
-
-      if (!microsoftRes.ok) throw new Error(microsoftData.error || "Could not load Microsoft connection");
-      if (!linkedInRes.ok) throw new Error(linkedInData.error || "Could not load LinkedIn connection");
-      if (!preferencesRes.ok) throw new Error(preferencesData.error || "Could not load preferences");
 
       setMicrosoftConnection(microsoftData);
       setLinkedInConnection(linkedInData);
       setSharedMailboxConfig(msConfigData.keys || {});
-      setPreferences(preferencesData);
-      setSelectedFormat(preferencesData.summaryFormat || DEFAULT_SUMMARY_FORMAT);
+      if (preferencesData) {
+        setPreferences(preferencesData);
+        setSelectedFormat(preferencesData.summaryFormat || DEFAULT_SUMMARY_FORMAT);
+      }
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Could not load settings");
     } finally {
